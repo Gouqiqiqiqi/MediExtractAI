@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@300;400;500&display=swap');
+
+@layer base {
+  body {
+    @apply text-on-surface antialiased bg-surface-dim;
+    font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
+  }
+
+  ::selection {
+    @apply bg-gm-blue-surface text-on-surface;
+  }
+}
+
+@layer components {
+  /* ── Google-style Filled Button ── */
+  .btn-filled {
+    @apply bg-gm-blue text-white px-6 py-2.5 rounded-gm-xl text-label-lg
+           hover:bg-gm-blue-hover hover:shadow-gm-1 transition-all duration-200
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-gm-blue focus-visible:ring-offset-2
+           disabled:bg-surface-container-high disabled:text-on-surface-variant disabled:shadow-none disabled:cursor-not-allowed
+           active:scale-[0.98];
+  }
+
+  /* ── Google-style Outlined Button ── */
+  .btn-outlined {
+    @apply bg-transparent text-gm-blue border border-outline px-6 py-2.5 rounded-gm-xl text-label-lg
+           hover:bg-gm-blue-light transition-all duration-200
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-gm-blue focus-visible:ring-offset-2
+           active:scale-[0.98];
+  }
+
+  /* ── Google-style Tonal Button ── */
+  .btn-tonal {
+    @apply bg-gm-blue-light text-gm-blue px-6 py-2.5 rounded-gm-xl text-label-lg
+           hover:shadow-gm-1 transition-all duration-200
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-gm-blue focus-visible:ring-offset-2
+           active:scale-[0.98];
+  }
+
+  /* ── Google-style Text Button ── */
+  .btn-text {
+    @apply bg-transparent text-gm-blue px-3 py-2 rounded-gm-xl text-label-lg
+           hover:bg-gm-blue-light transition-all duration-200
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-gm-blue focus-visible:ring-offset-2;
+  }
+
+  /* ── Google-style Danger Button ── */
+  .btn-danger {
+    @apply bg-gm-red text-white px-6 py-2.5 rounded-gm-xl text-label-lg
+           hover:shadow-gm-1 transition-all duration-200
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-gm-red focus-visible:ring-offset-2;
+  }
+
+  /* ── Google-style Card ── */
+  .card {
+    @apply bg-surface rounded-gm-md p-6 border border-outline/50 transition-shadow duration-200;
+  }
+
+  .card-elevated {
+    @apply bg-surface rounded-gm-md p-6 shadow-gm-1 hover:shadow-gm-2 transition-shadow duration-200;
+  }
+
+  /* ── Google-style Input ── */
+  .input-field {
+    @apply w-full px-4 py-3 bg-surface border border-outline rounded-gm-sm text-body-md text-on-surface
+           focus:outline-none focus:border-gm-blue focus:ring-1 focus:ring-gm-blue
+           placeholder:text-on-surface-variant transition-colors duration-200;
+  }
+
+  .label {
+    @apply block text-label-lg text-on-surface-variant mb-1.5;
+  }
+
+  /* ── Google-style Chips ── */
+  .chip {
+    @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-gm-sm text-label-md
+           border border-outline bg-surface text-on-surface
+           hover:bg-surface-container transition-colors duration-150 cursor-pointer select-none;
+  }
+
+  .chip-selected {
+    @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-gm-sm text-label-md
+           border-0 bg-gm-blue-light text-gm-blue
+           transition-colors duration-150 cursor-pointer select-none;
+  }
+
+  /* ── Google-style Checkbox ── */
+  .checkbox-gm {
+    @apply w-[18px] h-[18px] rounded-sm border-2 border-on-surface-variant
+           checked:bg-gm-blue checked:border-gm-blue focus:ring-2 focus:ring-gm-blue/30
+           transition-colors duration-150 cursor-pointer accent-gm-blue;
+  }
+
+  /* ── Divider ── */
+  .divider {
+    @apply border-t border-outline;
+  }
+}
+
