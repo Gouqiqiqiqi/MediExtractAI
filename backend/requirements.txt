@@ -1,0 +1,37 @@
+# FastAPI
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+python-multipart==0.0.18
+
+# Auth (used when DEMO_MODE=false)
+python-jose[cryptography]==3.3.*
+httpx==0.28.*
+
+# Database
+sqlalchemy==2.0.*
+aiosqlite==0.20.*
+alembic==1.14.*
+
+# Optional providers (uncomment if needed)
+# openai==1.59.*          # AI_PROVIDER=azure_openai
+# aioodbc==0.5.*          # SQL Server source databases
+
+# File Parsing
+python-docx==1.1.*
+pymupdf==1.25.*
+pdfplumber==0.11.*
+
+# Data / Export
+pandas==2.2.*
+openpyxl==3.1.*
+
+# Config / validation
+pydantic[email]==2.10.*
+pydantic-settings==2.7.*
+
+# Testing
+pytest==8.3.*
+pytest-asyncio==0.25.*
+
+# Linting
+ruff==0.9.*
