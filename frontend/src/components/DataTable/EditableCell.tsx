@@ -34,7 +34,7 @@ export default function EditableCell({ value, onChange, dataType }: Props) {
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => e.key === 'Enter' && commit()}
-        className="input-field text-body-md py-1.5"
+        className="input-field py-1 px-1.5 text-body-md"
       />
     );
   }
@@ -45,8 +45,9 @@ export default function EditableCell({ value, onChange, dataType }: Props) {
         setDraft(formatValue(value, dataType));
         setEditing(true);
       }}
-      className="cursor-pointer hover:bg-gm-blue-light px-1.5 py-1 rounded-gm-sm min-h-[1.5em] inline-block
-                 text-on-surface transition-colors duration-150"
+      className="cursor-text hover:bg-gm-blue-light hover:ring-1 hover:ring-gm-blue-surface
+                 px-1.5 py-1 -mx-1.5 rounded-gm-sm inline-block min-w-[2rem] min-h-[1.5em]
+                 text-body-md text-on-surface transition-colors duration-100"
       title="Click to edit"
     >
       {displayValue(value, dataType)}

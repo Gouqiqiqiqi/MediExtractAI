@@ -1,74 +1,120 @@
 /** @type {import('tailwindcss').Config} */
+
+/*
+ * Design tokens for a clinical data tool.
+ *
+ * The brief is a working instrument, not a consumer app: information density
+ * over generous whitespace, hairline borders instead of drop shadows to
+ * separate regions, tight corner radii, and a restrained palette where colour
+ * carries meaning rather than decoration. Shadows are reserved for things that
+ * genuinely float above the page — menus, dialogs.
+ *
+ * The token *names* are inherited from the previous Material-flavoured system.
+ * Renaming them across every component would have been churn for no benefit,
+ * so the names stayed and the values changed.
+ */
 export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
       colors: {
-        // Google Material palette
         gm: {
-          blue: '#1a73e8',
-          'blue-hover': '#1765cc',
-          'blue-light': '#e8f0fe',
-          'blue-surface': '#d2e3fc',
-          red: '#d93025',
-          'red-light': '#fce8e6',
-          green: '#1e8e3e',
-          'green-light': '#e6f4ea',
-          yellow: '#f9ab00',
-          'yellow-light': '#fef7e0',
-          orange: '#e8710a',
+          // A deep, low-chroma blue. Bright enough to read as interactive,
+          // restrained enough not to compete with clinical status colours.
+          blue: '#1d4ed8',
+          'blue-hover': '#1a43b8',
+          'blue-light': '#eef2ff',
+          'blue-surface': '#dbe4fe',
+          red: '#b42318',
+          'red-light': '#fef3f2',
+          green: '#067647',
+          'green-light': '#ecfdf3',
+          yellow: '#b54708',
+          'yellow-light': '#fffaeb',
+          orange: '#c4320a',
         },
         surface: {
           DEFAULT: '#ffffff',
-          dim: '#f8f9fa',
-          container: '#f1f3f4',
-          'container-high': '#e8eaed',
-          'container-highest': '#dadce0',
+          dim: '#f7f8fa',
+          container: '#f1f3f6',
+          'container-high': '#e7eaef',
+          'container-highest': '#dbdfe6',
         },
         on: {
-          surface: '#202124',
-          'surface-variant': '#5f6368',
-          primary: '#1a73e8',
-          error: '#d93025',
+          surface: '#12161f',
+          'surface-variant': '#5b6472',
+          primary: '#1d4ed8',
+          error: '#b42318',
         },
         outline: {
-          DEFAULT: '#dadce0',
-          variant: '#e8eaed',
+          DEFAULT: '#dfe3e9',
+          variant: '#edf0f4',
         },
-        // NHS accent retained for branding
         nhs: {
           blue: '#005eb8',
           'dark-blue': '#003087',
         },
       },
       fontFamily: {
-        sans: ['"Google Sans"', '"Roboto"', 'Arial', 'sans-serif'],
+        // System stack: no webfont request, no CSP exception, and it renders
+        // as SF Pro / Segoe UI natively — which is what a desktop tool should
+        // look like. The previous Google Fonts @import was blocked by this
+        // app's own Content-Security-Policy and never actually loaded.
+        sans: [
+          '-apple-system',
+          'BlinkMacSystemFont',
+          '"Segoe UI"',
+          'Inter',
+          'Roboto',
+          '"Helvetica Neue"',
+          'Arial',
+          'sans-serif',
+        ],
+        mono: [
+          'ui-monospace',
+          'SFMono-Regular',
+          '"SF Mono"',
+          'Menlo',
+          'Consolas',
+          '"Liberation Mono"',
+          'monospace',
+        ],
       },
       fontSize: {
-        'display-lg': ['3rem', { lineHeight: '3.5rem', fontWeight: '400' }],
-        'display-md': ['2.25rem', { lineHeight: '2.75rem', fontWeight: '400' }],
-        'display-sm': ['1.75rem', { lineHeight: '2.25rem', fontWeight: '400' }],
-        'headline-lg': ['1.5rem', { lineHeight: '2rem', fontWeight: '400' }],
-        'headline-md': ['1.25rem', { lineHeight: '1.75rem', fontWeight: '500' }],
-        'title-lg': ['1.125rem', { lineHeight: '1.5rem', fontWeight: '500' }],
-        'title-md': ['1rem', { lineHeight: '1.5rem', fontWeight: '500' }],
-        'title-sm': ['0.875rem', { lineHeight: '1.25rem', fontWeight: '500' }],
-        'body-lg': ['1rem', { lineHeight: '1.5rem', fontWeight: '400' }],
-        'body-md': ['0.875rem', { lineHeight: '1.25rem', fontWeight: '400' }],
-        'label-lg': ['0.875rem', { lineHeight: '1.25rem', fontWeight: '500' }],
+        // Denser than the Material scale it replaces. 13px body is the working
+        // size for tables and forms; anything larger wastes rows.
+        'display-lg': ['1.75rem', { lineHeight: '2.25rem', fontWeight: '650', letterSpacing: '-0.02em' }],
+        'display-md': ['1.5rem', { lineHeight: '2rem', fontWeight: '650', letterSpacing: '-0.02em' }],
+        'display-sm': ['1.3125rem', { lineHeight: '1.75rem', fontWeight: '650', letterSpacing: '-0.015em' }],
+        'headline-lg': ['1.125rem', { lineHeight: '1.625rem', fontWeight: '600', letterSpacing: '-0.01em' }],
+        'headline-md': ['1rem', { lineHeight: '1.5rem', fontWeight: '600' }],
+        'title-lg': ['0.9375rem', { lineHeight: '1.375rem', fontWeight: '600' }],
+        'title-md': ['0.875rem', { lineHeight: '1.25rem', fontWeight: '600' }],
+        'title-sm': ['0.8125rem', { lineHeight: '1.125rem', fontWeight: '600' }],
+        'body-lg': ['0.875rem', { lineHeight: '1.375rem', fontWeight: '400' }],
+        'body-md': ['0.8125rem', { lineHeight: '1.25rem', fontWeight: '400' }],
+        'label-lg': ['0.8125rem', { lineHeight: '1.125rem', fontWeight: '500' }],
         'label-md': ['0.75rem', { lineHeight: '1rem', fontWeight: '500' }],
+        'label-sm': ['0.6875rem', { lineHeight: '0.875rem', fontWeight: '600', letterSpacing: '0.04em' }],
       },
       borderRadius: {
-        'gm-sm': '8px',
-        'gm-md': '12px',
-        'gm-lg': '16px',
-        'gm-xl': '28px',
+        'gm-sm': '4px',
+        'gm-md': '6px',
+        'gm-lg': '8px',
+        // Was a 28px pill. Rounded rectangles read as tools; pills read as
+        // consumer apps.
+        'gm-xl': '6px',
       },
       boxShadow: {
-        'gm-1': '0 1px 2px 0 rgba(60,64,67,.3), 0 1px 3px 1px rgba(60,64,67,.15)',
-        'gm-2': '0 1px 2px 0 rgba(60,64,67,.3), 0 2px 6px 2px rgba(60,64,67,.15)',
-        'gm-3': '0 1px 3px 0 rgba(60,64,67,.3), 0 4px 8px 3px rgba(60,64,67,.15)',
-        'gm-4': '0 2px 3px 0 rgba(60,64,67,.3), 0 6px 10px 4px rgba(60,64,67,.15)',
+        // Barely-there. Structure comes from borders; these are for the few
+        // things that really do float.
+        'gm-1': '0 1px 2px 0 rgba(16,24,40,0.04)',
+        'gm-2': '0 1px 3px 0 rgba(16,24,40,0.08), 0 1px 2px -1px rgba(16,24,40,0.04)',
+        'gm-3': '0 4px 8px -2px rgba(16,24,40,0.10), 0 2px 4px -2px rgba(16,24,40,0.05)',
+        'gm-4': '0 12px 20px -6px rgba(16,24,40,0.12), 0 4px 8px -4px rgba(16,24,40,0.06)',
+      },
+      spacing: {
+        18: '4.5rem',
       },
     },
   },

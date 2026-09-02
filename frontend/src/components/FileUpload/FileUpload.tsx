@@ -1,5 +1,5 @@
 /**
- * FileUpload — drag-and-drop multi-file uploader with Google Material styling.
+ * FileUpload — drag-and-drop multi-file uploader.
  */
 
 import { useCallback, useState } from 'react';
@@ -89,76 +89,73 @@ export default function FileUpload({ onTextExtracted, multiple = true }: Props) 
   };
 
   return (
-    <div className="card-elevated space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-title-md font-semibold text-on-surface">Upload Files</h3>
-        {results.length > 0 && (
-          <button onClick={clearAll} className="btn-text text-label-md text-gm-red">
-            Clear All
-          </button>
-        )}
-      </div>
-
-      {/* Uploaded files list */}
+    <div className="space-y-3">
+      {/* Uploaded files */}
       {results.length > 0 && (
-        <div className="space-y-2">
+        <div className="card divide-y divide-outline-variant">
           {results.map((r, i) => (
             <div
               key={`${r.filename}-${i}`}
-              className="flex items-center gap-3 px-4 py-3 bg-surface-container rounded-gm-md group"
+              className="flex items-center gap-2.5 px-3 py-2 group"
             >
-              <div className="w-9 h-9 rounded-gm-sm bg-gm-blue-light flex items-center justify-center flex-shrink-0">
-                <FileText size={18} className="text-gm-blue" />
-              </div>
+              <FileText size={15} className="text-on-surface-variant shrink-0" />
               <div className="flex-1 min-w-0">
-                <p className="text-body-md text-on-surface font-medium truncate">{r.filename}</p>
-                <p className="text-label-md text-on-surface-variant">
-                  {(r.size_bytes / 1024).toFixed(1)} KB · {r.char_count.toLocaleString()} chars
+                <p className="text-body-md text-on-surface truncate">{r.filename}</p>
+                <p className="text-label-md text-on-surface-variant tabular">
+                  {(r.size_bytes / 1024).toFixed(1)} KB · {r.char_count.toLocaleString()} characters
                 </p>
               </div>
               <button
                 onClick={() => removeFile(i)}
-                className="text-on-surface-variant hover:text-gm-red transition-colors opacity-0 group-hover:opacity-100"
+                className="btn-icon w-7 h-7 hover:text-gm-red opacity-0 group-hover:opacity-100
+                           focus-visible:opacity-100 transition-opacity"
+                aria-label={`Remove ${r.filename}`}
               >
-                <X size={16} />
+                <X size={14} />
               </button>
             </div>
           ))}
-          <p className="text-label-md text-on-surface-variant">
-            {results.length} file{results.length !== 1 ? 's' : ''} ·{' '}
-            {results.reduce((sum, r) => sum + r.char_count, 0).toLocaleString()} total characters
-          </p>
+          <div className="flex items-center justify-between px-3 py-2 bg-surface-dim">
+            <span className="text-label-md text-on-surface-variant tabular">
+              {results.length} file{results.length !== 1 ? 's' : ''} ·{' '}
+              {results.reduce((sum, r) => sum + r.char_count, 0).toLocaleString()} characters
+            </span>
+            <button onClick={clearAll} className="btn-text text-gm-red hover:text-gm-red">
+              Clear all
+            </button>
+          </div>
         </div>
       )}
 
       {/* Dropzone */}
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-gm-lg cursor-pointer transition-all duration-200 text-center py-10 ${
-          isDragActive
-            ? 'border-gm-blue bg-gm-blue-light/50'
-            : 'border-outline/60 hover:border-gm-blue hover:bg-surface-container'
-        } ${uploading ? 'opacity-50 cursor-wait' : ''}`}
+        className={`border border-dashed rounded-gm-lg cursor-pointer transition-colors duration-150
+                    text-center py-8 px-4 ${
+                      isDragActive
+                        ? 'border-gm-blue bg-gm-blue-light'
+                        : 'border-outline hover:border-gm-blue hover:bg-surface-dim'
+                    } ${uploading ? 'opacity-60 cursor-wait' : ''}`}
       >
         <input {...getInputProps()} />
         {uploading ? (
-          <Loader2 size={36} className="mx-auto text-gm-blue animate-spin mb-3" />
+          <Loader2 size={20} className="mx-auto text-gm-blue animate-spin mb-2" />
         ) : (
-          <div className="w-14 h-14 mx-auto rounded-gm-xl bg-gm-blue-light flex items-center justify-center mb-3">
-            <Upload size={24} className="text-gm-blue" />
-          </div>
+          <Upload size={20} className="mx-auto text-on-surface-variant mb-2" />
         )}
-        <p className="text-title-sm font-medium text-on-surface">
+        <p className="text-title-md text-on-surface">
           {uploading
-            ? 'Uploading & extracting...'
+            ? 'Uploading and extracting text…'
             : isDragActive
-              ? 'Drop files here'
+              ? 'Drop the files here'
               : results.length > 0
                 ? 'Drop more files, or click to browse'
-                : 'Drag & drop files, or click to browse'}
+                : 'Drag files here, or click to browse'}
         </p>
-        <p className="text-label-md text-on-surface-variant mt-1.5">
-          Supported: .txt, .doc, .docx, .pdf · Max 10 MB each{multiple ? ' · Multiple files allowed' : ''}
+        <p className="text-label-md text-on-surface-variant mt-1">
+          <span className="mono">.txt</span> <span className="mono">.doc</span>{' '}
+          <span className="mono">.docx</span> <span className="mono">.pdf</span> · up to 10 MB each
+          {multiple ? ' · multiple files allowed' : ''}
         </p>
       </div>
     </div>

@@ -9,65 +9,106 @@ interface NavItem {
   icon: typeof LayoutDashboard;
   /** Roles that may use this page. Omitted means everyone. */
   roles?: Role[];
+  section: 'work' | 'configure';
 }
 
 const navItems: NavItem[] = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/database', label: 'Database Extractor', icon: Database, roles: ['Admin', 'Clinician'] },
-  { to: '/upload', label: 'File Extractor', icon: FileUp, roles: ['Admin', 'Clinician'] },
-  { to: '/results', label: 'Results', icon: Table2 },
-  { to: '/data-sources', label: 'Data Sources', icon: Plug, roles: ['Admin'] },
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, section: 'work' },
+  {
+    to: '/database',
+    label: 'Database Extractor',
+    icon: Database,
+    roles: ['Admin', 'Clinician'],
+    section: 'work',
+  },
+  {
+    to: '/upload',
+    label: 'File Extractor',
+    icon: FileUp,
+    roles: ['Admin', 'Clinician'],
+    section: 'work',
+  },
+  { to: '/results', label: 'Results', icon: Table2, section: 'work' },
+  {
+    to: '/data-sources',
+    label: 'Data Sources',
+    icon: Plug,
+    roles: ['Admin'],
+    section: 'configure',
+  },
 ];
+
+const SECTION_LABEL: Record<NavItem['section'], string> = {
+  work: 'Extract',
+  configure: 'Configure',
+};
 
 export default function Sidebar() {
   const location = useLocation();
   const { role } = useRole();
 
   const visible = navItems.filter((item) => !item.roles || item.roles.includes(role));
+  const sections: NavItem['section'][] = ['work', 'configure'];
 
   return (
-    <aside className="w-72 bg-surface flex flex-col min-h-screen border-r border-outline/40">
-      {/* Logo */}
-      <div className="px-6 py-5 flex items-center gap-3">
-        <div className="w-10 h-10 rounded-gm-lg bg-gm-blue flex items-center justify-center">
-          <span className="text-white font-bold text-title-md">M</span>
-        </div>
-        <Link to="/" className="flex flex-col">
-          <span className="font-bold text-title-md text-on-surface">MediExtractAI</span>
-          <span className="text-label-md text-on-surface-variant">Clinical Data Extraction</span>
-        </Link>
-      </div>
-
-      <div className="divider mx-4" />
+    <aside className="w-60 shrink-0 bg-surface flex flex-col h-screen border-r border-outline">
+      {/* Wordmark */}
+      <Link to="/" className="flex items-center gap-2.5 px-4 h-14 border-b border-outline">
+        <span
+          className="w-7 h-7 rounded-gm-md bg-gm-blue flex items-center justify-center
+                     text-white font-semibold text-label-lg shrink-0"
+        >
+          M
+        </span>
+        <span className="flex flex-col leading-tight min-w-0">
+          <span className="text-title-md text-on-surface truncate">MediExtractAI</span>
+          <span className="text-label-md text-on-surface-variant truncate">
+            Clinical data extraction
+          </span>
+        </span>
+      </Link>
 
       {/* Navigation */}
-      <nav className="flex-1 py-3 px-3 space-y-1">
-        {visible.map(({ to, label, icon: Icon }) => {
-          const isActive = location.pathname === to;
+      <nav className="flex-1 overflow-y-auto py-3">
+        {sections.map((section) => {
+          const items = visible.filter((i) => i.section === section);
+          if (items.length === 0) return null;
           return (
-            <Link
-              key={to}
-              to={to}
-              className={`flex items-center gap-3 px-4 py-2.5 rounded-gm-xl text-label-lg font-medium transition-all duration-200 ${
-                isActive
-                  ? 'bg-gm-blue-light text-gm-blue'
-                  : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
-              }`}
-            >
-              <Icon size={20} strokeWidth={isActive ? 2.2 : 1.8} />
-              {label}
-            </Link>
+            <div key={section} className="px-2 mb-4">
+              <p className="px-2 mb-1 text-label-sm text-on-surface-variant/80">
+                {SECTION_LABEL[section]}
+              </p>
+              <div className="space-y-0.5">
+                {items.map(({ to, label, icon: Icon }) => {
+                  const isActive = location.pathname === to;
+                  return (
+                    <Link
+                      key={to}
+                      to={to}
+                      className={`flex items-center gap-2.5 px-2 py-1.5 rounded-gm-md
+                                  text-label-lg transition-colors duration-150 ${
+                                    isActive
+                                      ? 'bg-gm-blue-light text-gm-blue'
+                                      : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
+                                  }`}
+                    >
+                      <Icon size={16} strokeWidth={isActive ? 2.2 : 1.8} className="shrink-0" />
+                      <span className="truncate">{label}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
           );
         })}
       </nav>
 
-      {/* Demo badge */}
-      <div className="p-3">
-        <div className="divider mb-3" />
-        <div className="px-4 py-2.5 text-label-md text-on-surface-variant">
-          Demo mode &middot; synthetic data only
-          <span className="block mt-0.5">
-            Signed in as <span className="text-on-surface font-medium">{role}</span>
+      {/* Environment footer */}
+      <div className="px-3 py-3 border-t border-outline">
+        <div className="flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-gm-green shrink-0" />
+          <span className="text-label-md text-on-surface-variant">
+            Demo mode · synthetic data only
           </span>
         </div>
       </div>

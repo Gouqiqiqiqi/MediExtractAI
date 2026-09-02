@@ -1,5 +1,9 @@
 /**
- * SchemaBuilder — lets users define output columns (name, type, description).
+ * Define the table you want out of the notes.
+ *
+ * Renders content only — the surrounding panel and its heading belong to the
+ * step it sits in, so the same builder drops into both extractor pages without
+ * either of them growing a second title.
  */
 
 import { Plus } from 'lucide-react';
@@ -19,9 +23,7 @@ const EMPTY_COLUMN: ColumnDefinition = {
 };
 
 export default function SchemaBuilder({ columns, onChange }: Props) {
-  const addColumn = () => {
-    onChange([...columns, { ...EMPTY_COLUMN }]);
-  };
+  const addColumn = () => onChange([...columns, { ...EMPTY_COLUMN }]);
 
   const updateColumn = (index: number, updated: ColumnDefinition) => {
     const next = [...columns];
@@ -34,39 +36,39 @@ export default function SchemaBuilder({ columns, onChange }: Props) {
   };
 
   return (
-    <div className="card-elevated">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-title-md font-semibold text-on-surface">
-          Output Schema
-        </h3>
-        <button onClick={addColumn} className="btn-tonal text-label-md flex items-center gap-1.5">
-          <Plus size={16} />
-          Add Column
-        </button>
+    <div>
+      {/* Presets — the fast path, so they come first. */}
+      <div className="flex items-center gap-2 flex-wrap px-4 py-3 border-b border-outline bg-surface-dim">
+        <span className="text-label-md text-on-surface-variant">Start from a preset</span>
+        {PRESETS.map((preset) => (
+          <button key={preset.label} onClick={() => onChange(preset.columns)} className="chip">
+            {preset.label}
+            <span className="text-on-surface-variant/70">
+              {preset.columns.length}
+            </span>
+          </button>
+        ))}
       </div>
 
       {columns.length === 0 ? (
-        <div className="text-center py-10">
-          <div className="w-12 h-12 mx-auto rounded-gm-xl bg-surface-container flex items-center justify-center mb-3">
-            <Plus size={24} className="text-on-surface-variant" />
-          </div>
+        <div className="px-4 py-10 text-center">
           <p className="text-body-md text-on-surface-variant">
-            No columns defined. Click "Add Column" to start building your schema.
+            No columns yet. Pick a preset above, or add one column at a time.
           </p>
+          <button onClick={addColumn} className="btn-outlined mt-3">
+            <Plus size={14} />
+            Add column
+          </button>
         </div>
       ) : (
-        <div className="space-y-2">
-          {/* Header */}
-          <div className="grid grid-cols-12 gap-2 text-label-md font-medium text-on-surface-variant px-2">
-            <div className="col-span-1"></div>
-            <div className="col-span-3">Column Name</div>
-            <div className="col-span-2">Data Type</div>
-            <div className="col-span-4">Description</div>
-            <div className="col-span-1">Required</div>
-            <div className="col-span-1"></div>
+        <>
+          <div className="grid grid-cols-12 gap-2 px-3 py-2 text-label-sm text-on-surface-variant/80">
+            <div className="col-span-3">Name</div>
+            <div className="col-span-2">Type</div>
+            <div className="col-span-6">Extraction instruction</div>
+            <div className="col-span-1 text-right pr-8">Req.</div>
           </div>
 
-          {/* Rows */}
           {columns.map((col, i) => (
             <ColumnEditor
               key={i}
@@ -75,24 +77,15 @@ export default function SchemaBuilder({ columns, onChange }: Props) {
               onRemove={() => removeColumn(i)}
             />
           ))}
-        </div>
-      )}
 
-      {/* Presets */}
-      <div className="mt-4 pt-4 border-t border-outline/30">
-        <p className="text-label-md text-on-surface-variant mb-2">Quick presets:</p>
-        <div className="flex gap-2 flex-wrap">
-          {PRESETS.map((preset) => (
-            <button
-              key={preset.label}
-              onClick={() => onChange(preset.columns)}
-              className="chip"
-            >
-              {preset.label}
+          <div className="px-3 py-2.5 border-t border-outline">
+            <button onClick={addColumn} className="btn-text">
+              <Plus size={14} />
+              Add column
             </button>
-          ))}
-        </div>
-      </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -101,32 +94,40 @@ export default function SchemaBuilder({ columns, onChange }: Props) {
 
 const PRESETS: { label: string; columns: ColumnDefinition[] }[] = [
   {
-    label: 'General Clinical',
+    label: 'General clinical',
     columns: [
-      { name: 'Diagnosis', data_type: 'text', description: 'Primary diagnosis', required: true },
-      { name: 'Symptoms', data_type: 'text[]', description: 'Reported symptoms', required: false },
-      { name: 'Medications', data_type: 'text[]', description: 'Prescribed medications', required: false },
-      { name: 'Follow_Up_Date', data_type: 'date', description: 'Next appointment date', required: false },
+      { name: 'Diagnosis', data_type: 'text', description: 'Primary diagnosis or clinical impression', required: true },
+      { name: 'Symptoms', data_type: 'text[]', description: 'Symptoms the patient reports', required: false },
+      { name: 'Medications', data_type: 'text[]', description: 'Medications prescribed at this visit', required: false },
+      { name: 'Follow_Up_Date', data_type: 'date', description: 'Next appointment date if stated', required: false },
     ],
   },
   {
-    label: 'Vital Signs',
+    label: 'Vital signs',
     columns: [
       { name: 'BP_Systolic', data_type: 'integer', description: 'Systolic blood pressure (mmHg)', required: true },
       { name: 'BP_Diastolic', data_type: 'integer', description: 'Diastolic blood pressure (mmHg)', required: true },
       { name: 'Heart_Rate', data_type: 'integer', description: 'Heart rate (bpm)', required: false },
       { name: 'Temperature', data_type: 'float', description: 'Temperature (°C)', required: false },
-      { name: 'SpO2', data_type: 'integer', description: 'Oxygen saturation (%)', required: false },
+      { name: 'SpO2', data_type: 'integer', description: 'Oxygen saturation (%) on air unless stated', required: false },
     ],
   },
   {
-    label: 'Medication Review',
+    label: 'Medication review',
     columns: [
       { name: 'Drug_Name', data_type: 'text', description: 'Medication name', required: true },
-      { name: 'Dose', data_type: 'text', description: 'Dosage', required: true },
-      { name: 'Frequency', data_type: 'text', description: 'How often taken', required: false },
-      { name: 'Route', data_type: 'text', description: 'Route of administration', required: false },
-      { name: 'Indication', data_type: 'text', description: 'Reason for medication', required: false },
+      { name: 'Dose', data_type: 'text', description: 'Dose including units', required: true },
+      { name: 'Frequency', data_type: 'text', description: 'How often, e.g. BD, OD, TDS', required: false },
+      { name: 'Route', data_type: 'text', description: 'Route of administration, e.g. PO, IV', required: false },
+      { name: 'Indication', data_type: 'text', description: 'Reason the drug was given', required: false },
+    ],
+  },
+  {
+    label: 'Smoking & risk',
+    columns: [
+      { name: 'Current_Smoker', data_type: 'boolean', description: 'True ONLY if the patient smokes now. Ex-smokers are false.', required: true },
+      { name: 'Pack_Years', data_type: 'float', description: 'Pack-year history if stated', required: false },
+      { name: 'Alcohol_Units_Weekly', data_type: 'float', description: 'Units of alcohol per week if stated', required: false },
     ],
   },
 ];

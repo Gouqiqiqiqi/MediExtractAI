@@ -1,8 +1,10 @@
 /**
- * Single column definition row within the SchemaBuilder.
+ * One row of the output schema: what to call the column, its type, and — the
+ * field that does the real work — a description telling the model what to look
+ * for. The description is not documentation; it is the instruction.
  */
 
-import { GripVertical, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import type { ColumnDataType, ColumnDefinition } from '../../types';
 
 interface Props {
@@ -18,37 +20,32 @@ const DATA_TYPES: { value: ColumnDataType; label: string }[] = [
   { value: 'boolean', label: 'Boolean' },
   { value: 'date', label: 'Date' },
   { value: 'datetime', label: 'DateTime' },
-  { value: 'text[]', label: 'Text Array' },
+  { value: 'text[]', label: 'Text list' },
 ];
 
 export default function ColumnEditor({ column, onChange, onRemove }: Props) {
-  const update = (patch: Partial<ColumnDefinition>) =>
-    onChange({ ...column, ...patch });
+  const update = (patch: Partial<ColumnDefinition>) => onChange({ ...column, ...patch });
 
   return (
-    <div className="grid grid-cols-12 gap-2 items-center bg-surface-container rounded-gm-sm p-2.5 hover:bg-surface-container-high transition-colors">
-      {/* Drag handle */}
-      <div className="col-span-1 flex justify-center text-on-surface-variant cursor-grab">
-        <GripVertical size={16} />
-      </div>
-
-      {/* Name */}
+    <div className="grid grid-cols-12 gap-2 items-center px-3 py-2 border-t border-outline
+                    hover:bg-surface-dim transition-colors duration-150 group">
       <div className="col-span-3">
         <input
           type="text"
           value={column.name}
           onChange={(e) => update({ name: e.target.value })}
           placeholder="Column name"
-          className="input-field text-body-md"
+          className="input-field py-1.5"
+          aria-label="Column name"
         />
       </div>
 
-      {/* Type */}
       <div className="col-span-2">
         <select
           value={column.data_type}
           onChange={(e) => update({ data_type: e.target.value as ColumnDataType })}
-          className="input-field text-body-md"
+          className="select-field py-1.5"
+          aria-label="Data type"
         >
           {DATA_TYPES.map((dt) => (
             <option key={dt.value} value={dt.value}>
@@ -58,35 +55,35 @@ export default function ColumnEditor({ column, onChange, onRemove }: Props) {
         </select>
       </div>
 
-      {/* Description */}
-      <div className="col-span-4">
+      <div className="col-span-6">
         <input
           type="text"
           value={column.description}
           onChange={(e) => update({ description: e.target.value })}
-          placeholder="What to extract"
-          className="input-field text-body-md"
+          placeholder="What should the model look for? e.g. “true only if the patient smokes now”"
+          className="input-field py-1.5"
+          aria-label="Description"
         />
       </div>
 
-      {/* Required */}
-      <div className="col-span-1 flex justify-center">
-        <input
-          type="checkbox"
-          checked={column.required}
-          onChange={(e) => update({ required: e.target.checked })}
-          className="checkbox-gm"
-        />
-      </div>
-
-      {/* Remove */}
-      <div className="col-span-1 flex justify-center">
+      <div className="col-span-1 flex items-center justify-end gap-1">
+        <label className="flex items-center" title="Required">
+          <input
+            type="checkbox"
+            checked={column.required}
+            onChange={(e) => update({ required: e.target.checked })}
+            className="checkbox-gm"
+            aria-label="Required"
+          />
+        </label>
         <button
           onClick={onRemove}
-          className="text-on-surface-variant hover:text-gm-red transition-colors p-1 rounded-gm-sm hover:bg-surface"
+          className="btn-icon w-7 h-7 hover:text-gm-red opacity-0 group-hover:opacity-100
+                     focus-visible:opacity-100 transition-opacity"
           title="Remove column"
+          aria-label="Remove column"
         >
-          <Trash2 size={16} />
+          <Trash2 size={14} />
         </button>
       </div>
     </div>

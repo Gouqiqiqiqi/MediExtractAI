@@ -1,4 +1,6 @@
-import { Bell, Search, User } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Search, User } from 'lucide-react';
 import { useRole } from '../../auth/RoleContext';
 import RoleSwitcher from './RoleSwitcher';
 
@@ -9,42 +11,86 @@ const DISPLAY_NAME: Record<string, string> = {
 };
 
 export default function Header() {
-  const { role } = useRole();
+  const { role, canExtract } = useRole();
+  const navigate = useNavigate();
+  const [term, setTerm] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // ⌘K / Ctrl-K, or "/" when not already typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const typing =
+        e.target instanceof HTMLElement &&
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !typing)) {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const q = term.trim();
+    if (!q) return;
+    // Search means "find notes", and notes are browsed in the Database
+    // Extractor — so this hands off to that page rather than inventing a
+    // second results view that would then have to be kept in step with it.
+    navigate(`/database?q=${encodeURIComponent(q)}`);
+    setTerm('');
+    inputRef.current?.blur();
+  };
 
   return (
-    <header className="h-16 bg-surface border-b border-outline/40 flex items-center justify-between px-6">
-      {/* Search bar */}
-      <div className="relative w-96">
-        <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
-        <input
-          type="text"
-          placeholder="Search notes, extractions..."
-          className="w-full pl-10 pr-4 py-2 bg-surface-container rounded-gm-xl text-body-md text-on-surface
-                     placeholder:text-on-surface-variant border-0 focus:outline-none focus:ring-2 focus:ring-gm-blue/40
-                     transition-all duration-200"
-        />
-      </div>
+    <header className="h-14 shrink-0 bg-surface border-b border-outline flex items-center gap-4 px-4">
+      {canExtract ? (
+        <form onSubmit={submit} className="relative w-full max-w-md">
+          <Search
+            size={15}
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none"
+          />
+          <input
+            ref={inputRef}
+            type="search"
+            value={term}
+            onChange={(e) => setTerm(e.target.value)}
+            placeholder="Search clinical notes…"
+            aria-label="Search clinical notes"
+            className="w-full h-8 pl-8 pr-12 bg-surface-container border border-transparent
+                       rounded-gm-md text-body-md text-on-surface
+                       placeholder:text-on-surface-variant/80
+                       focus:outline-none focus:bg-surface focus:border-gm-blue
+                       focus:ring-2 focus:ring-gm-blue/25 transition-colors duration-150"
+          />
+          <kbd
+            className="kbd absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none
+                       hidden sm:inline-flex"
+          >
+            ⌘K
+          </kbd>
+        </form>
+      ) : (
+        <div className="flex-1" />
+      )}
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 ml-auto shrink-0">
         <RoleSwitcher />
 
-        {/* Notification */}
-        <button className="w-10 h-10 rounded-gm-xl flex items-center justify-center
-                           text-on-surface-variant hover:bg-surface-container transition-colors duration-200">
-          <Bell size={20} />
-        </button>
-
-        {/* User avatar */}
-        <div className="flex items-center gap-3 pl-3 border-l border-outline/40">
-          <div className="w-9 h-9 rounded-gm-xl bg-gm-blue-light flex items-center justify-center">
-            <User size={18} className="text-gm-blue" />
-          </div>
-          <div className="flex flex-col leading-tight">
-            <span className="text-label-lg text-on-surface font-medium">
+        <div className="flex items-center gap-2 pl-2.5 ml-1 border-l border-outline">
+          <span
+            className="w-7 h-7 rounded-gm-md bg-surface-container border border-outline
+                       flex items-center justify-center shrink-0"
+          >
+            <User size={14} className="text-on-surface-variant" />
+          </span>
+          <span className="flex flex-col leading-tight">
+            <span className="text-label-lg text-on-surface">
               {DISPLAY_NAME[role] ?? 'Demo User'}
             </span>
             <span className="text-label-md text-on-surface-variant">{role}</span>
-          </div>
+          </span>
         </div>
       </div>
     </header>

@@ -2,8 +2,8 @@
  * Demo-only control for viewing the app as a different role.
  *
  * Exists because "the flows differ by role" is a claim, and a claim is weaker
- * than letting someone switch and watch the navigation and permissions change
- * in front of them.
+ * than letting someone switch and watch the navigation and the permissions
+ * change in front of them.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -21,11 +21,20 @@ export default function RoleSwitcher() {
     const onClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
+    const onEsc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onEsc);
+    };
   }, [open]);
 
   const choose = (next: Role) => {
+    if (next === role) {
+      setOpen(false);
+      return;
+    }
     setRole(next);
     setOpen(false);
     // A role change alters what every page may load. Reloading is blunt but
@@ -37,37 +46,42 @@ export default function RoleSwitcher() {
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 px-3 py-2 rounded-gm-xl text-label-md
-                   text-on-surface-variant hover:bg-surface-container transition-colors duration-200"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="flex items-center gap-1.5 h-8 px-2.5 rounded-gm-md border border-outline
+                   bg-surface text-label-lg text-on-surface-variant
+                   hover:bg-surface-container hover:text-on-surface transition-colors duration-150"
         title="Demo only — switch role to see how the app differs"
       >
-        <Eye size={16} />
-        <span>
-          View as <span className="font-medium text-on-surface">{role}</span>
-        </span>
-        <ChevronDown size={14} />
+        <Eye size={14} />
+        <span className="hidden md:inline">View as</span>
+        <span className="text-on-surface">{role}</span>
+        <ChevronDown size={13} className={open ? 'rotate-180 transition-transform' : 'transition-transform'} />
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-1 w-80 bg-surface rounded-gm-xl shadow-lg
-                        border border-outline/40 py-2 z-50">
-          <div className="px-4 py-2 text-label-md text-on-surface-variant">
+        <div
+          role="menu"
+          className="absolute right-0 mt-1.5 w-80 bg-surface rounded-gm-lg shadow-gm-4
+                     border border-outline py-1 z-50"
+        >
+          <p className="px-3 py-2 text-label-md text-on-surface-variant border-b border-outline">
             Demo only. The API enforces these roles — the 403s are real.
-          </div>
-          <div className="divider my-1" />
+          </p>
           {ROLES.map((r) => (
             <button
               key={r}
+              role="menuitem"
               onClick={() => choose(r)}
-              className="w-full text-left px-4 py-2.5 hover:bg-surface-container
-                         transition-colors duration-150 flex items-start gap-3"
+              className="w-full text-left px-3 py-2 hover:bg-surface-container
+                         transition-colors duration-150 flex items-start gap-2.5"
             >
-              <span className="w-4 pt-0.5">
-                {r === role && <Check size={16} className="text-gm-blue" />}
+              <span className="w-3.5 pt-0.5 shrink-0">
+                {r === role && <Check size={14} className="text-gm-blue" />}
               </span>
-              <span>
-                <span className="block text-label-lg font-medium text-on-surface">{r}</span>
-                <span className="block text-label-md text-on-surface-variant">
+              <span className="min-w-0">
+                <span className="block text-label-lg text-on-surface">{r}</span>
+                <span className="block text-label-md text-on-surface-variant mt-0.5">
                   {ROLE_BLURB[r]}
                 </span>
               </span>
