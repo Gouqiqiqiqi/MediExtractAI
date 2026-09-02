@@ -211,6 +211,129 @@ class ExtractionResponse(BaseModel):
     # data. The UI renders these read-only — they are a record of where the
     # data came from, not a value a reviewer should be able to correct.
     provenance_columns: list[str] = Field(default_factory=list)
+    # The run this result was recorded as. Every extraction is persisted as a
+    # draft before it is returned, so nothing depends on the browser keeping it.
+    run_id: str = ""
+
+
+class RunStatus(StrEnum):
+    """Where a run sits between "the model answered" and "a clinician signed"."""
+
+    DRAFT = "draft"
+    IN_REVIEW = "in_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class RowStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class RunRow(BaseModel):
+    """One extracted row as a reviewer sees it."""
+
+    id: str
+    row_index: int
+    note_id: str
+    patient_id: str
+    data: dict[str, Any]
+    # The model's untouched answer. The UI shows it behind any value a person
+    # changed, so a correction can always be inspected or undone.
+    ai_data: dict[str, Any]
+    # Columns where data differs from ai_data — a human correction.
+    corrected_columns: list[str] = Field(default_factory=list)
+    status: RowStatus = RowStatus.PENDING
+    review_note: str = ""
+    edited_by: str = ""
+    edited_at: str | None = None
+    decided_by: str = ""
+    decided_at: str | None = None
+
+
+class RunSummary(BaseModel):
+    """A run in a list: enough to choose one, not enough to review it."""
+
+    id: str
+    created_at: str
+    created_by: str
+    source_kind: str
+    source_label: str
+    note_count: int
+    row_count: int
+    status: RunStatus
+    models_used: str = ""
+    approved_by: str = ""
+    approved_at: str | None = None
+    pending_rows: int = 0
+    approved_rows: int = 0
+    rejected_rows: int = 0
+    corrected_rows: int = 0
+
+
+class RunDetail(RunSummary):
+    """A run with everything needed to review it."""
+
+    columns: list[ColumnDefinition]
+    provenance_columns: list[str] = Field(default_factory=list)
+    rows: list[RunRow]
+    sign_off_note: str = ""
+
+
+class RunListResponse(BaseModel):
+    items: list[RunSummary]
+    total: int
+    page: int
+    page_size: int
+
+
+class RunStats(BaseModel):
+    """Outstanding review work, for the dashboard and the navigation badge."""
+
+    total: int = 0
+    draft: int = 0
+    in_review: int = 0
+    approved: int = 0
+    rejected: int = 0
+    awaiting_review: int = 0
+    pending_rows: int = 0
+
+
+class RowEditRequest(BaseModel):
+    """Correct one or more values on a row.
+
+    Partial by design: a reviewer fixes the field that is wrong, and sending
+    the whole row back would make an unrelated stale value overwrite someone
+    else's correction.
+    """
+
+    values: dict[str, Any] = Field(..., min_length=1)
+
+
+class RowRevertRequest(BaseModel):
+    """Put the model's original answer back. Omit the column to revert them all."""
+
+    column: str | None = None
+
+
+class RowDecisionRequest(BaseModel):
+    """Approve, reject, or reopen a single row."""
+
+    status: RowStatus
+    note: str = Field(default="", max_length=1000)
+
+
+class RunApprovalRequest(BaseModel):
+    """Sign off a run.
+
+    ``approve_pending`` is the batch case — "the rest are fine" — and it is
+    recorded as exactly that, because a sign-off that claims each row was read
+    individually when it was not is worse than no sign-off at all.
+    """
+
+    approve_pending: bool = True
+    note: str = Field(default="", max_length=1000)
 
 
 class ModelStatus(BaseModel):
@@ -245,10 +368,5 @@ class UploadResponse(BaseModel):
     char_count: int
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Export
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class ExportRequest(BaseModel):
-    columns: list[ColumnDefinition]
-    rows: list[dict[str, Any]]
+# Export takes no request body any more: a file is produced from a stored run,
+# so what leaves is what was reviewed rather than what a client posted back.

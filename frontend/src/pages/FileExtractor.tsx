@@ -8,27 +8,38 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FileText, Play, Table2 } from 'lucide-react';
-import type { ColumnDefinition, ExtractionResponse } from '../types';
+import { ClipboardCheck, FileText, Play } from 'lucide-react';
+import type { ColumnDefinition, RunDetail } from '../types';
 import { extractFromText } from '../api/extraction';
 import { errorMessage } from '../api/errors';
 import FileUpload from '../components/FileUpload/FileUpload';
 import SchemaBuilder from '../components/SchemaBuilder/SchemaBuilder';
-import DataTable from '../components/DataTable/DataTable';
+import RunDialog from '../components/Review/RunDialog';
 import StepPanel from '../components/common/StepPanel';
-import { saveResult } from '../lib/resultStore';
+import { RunStatusChip } from '../components/Review/StatusChip';
+import { fetchRun } from '../api/runs';
+import { useRole } from '../auth/RoleContext';
+import { runProgress } from '../lib/runProgress';
+import { runsChanged } from '../lib/runEvents';
+import { relativeTime } from '../lib/time';
 
 export default function FileExtractor() {
+  const { canExtract } = useRole();
   const [columns, setColumns] = useState<ColumnDefinition[]>([]);
   const [text, setText] = useState('');
-  const [filename, setFilename] = useState('');
-  const [result, setResult] = useState<ExtractionResponse | null>(null);
+  const [filenames, setFilenames] = useState<string[]>([]);
+  // The finished run, and whether its table is open over the page. Closing the
+  // pop-up keeps the run, so the panel below can offer to reopen it.
+  const [run, setRun] = useState<RunDetail | null>(null);
+  const [showResult, setShowResult] = useState(false);
   const [extracting, setExtracting] = useState(false);
 
-  const handleTextExtracted = (extractedText: string, name: string) => {
+  const documentLabel = filenames.join(', ') || 'Uploaded text';
+
+  const handleTextExtracted = (extractedText: string, names: string[]) => {
     setText(extractedText);
-    setFilename(name);
-    setResult(null);
+    setFilenames(names);
+    setRun(null);
   };
 
   const namedColumns = columns.filter((c) => c.name.trim());
@@ -45,11 +56,14 @@ export default function FileExtractor() {
       const res = await extractFromText({
         text,
         columns,
-        source_name: filename || undefined,
+        source_name: filenames.join(', ') || undefined,
       });
-      setResult(res);
-      saveResult(res);
-      toast.success(`Extracted ${res.rows.length} rows`);
+      // The backend has already saved this as a draft run; reading it back is
+      // what gives every row its identity, so a correction made in the pop-up
+      // is the same edit the review page would make.
+      setRun(await fetchRun(res.run_id));
+      setShowResult(true);
+      runsChanged();
     } catch (err) {
       toast.error(errorMessage(err, 'Extraction failed — check the API logs'), {
         duration: 8000,
@@ -76,7 +90,7 @@ export default function FileExtractor() {
           status={hasText ? 'done' : 'active'}
           summary={
             hasText
-              ? `${filename || 'Uploaded text'} · ${text.length.toLocaleString()} characters`
+              ? `${documentLabel} · ${text.length.toLocaleString()} characters`
               : 'Nothing uploaded yet'
           }
         >
@@ -117,33 +131,38 @@ export default function FileExtractor() {
           <SchemaBuilder columns={columns} onChange={setColumns} />
         </StepPanel>
 
-        {result && (
+        {run && (
           <StepPanel
             index={3}
-            title="Results"
+            title="Review"
             status="done"
-            summary={`${result.rows.length} rows`}
-            actions={
-              <Link to="/results" className="btn-outlined">
-                <Table2 size={14} />
-                Review &amp; export
-              </Link>
+            summary={
+              <span className="flex items-center gap-1.5">
+                <RunStatusChip status={runProgress(run).status} />
+                {run.rows.length} row{run.rows.length === 1 ? '' : 's'}
+                <span className="text-outline">·</span>
+                {runProgress(run).pending} pending
+                <span className="text-outline">·</span>
+                {relativeTime(run.created_at)}
+              </span>
             }
-            flush
+            actions={
+              <>
+                <button onClick={() => setShowResult(true)} className="btn-outlined">
+                  <ClipboardCheck size={14} />
+                  Open review
+                </button>
+                <Link to={`/review?run=${run.id}`} className="btn-text">
+                  All runs
+                </Link>
+              </>
+            }
           >
-            <DataTable
-              columns={result.columns}
-              data={result.rows}
-              readOnlyColumns={result.provenance_columns}
-              onDataChange={(rows) => {
-                // Corrections made here have to reach the stored result too,
-                // or the Results page and any export would hand back the
-                // pre-edit values.
-                const updated = { ...result, rows };
-                setResult(updated);
-                saveResult(updated);
-              }}
-            />
+            <p className="text-body-md text-on-surface-variant">
+              Saved on the server as a draft — nothing here has been approved yet.
+              These rows came from an uploaded file, so their provenance is a filename:
+              there is no source system to read the original back from.
+            </p>
           </StepPanel>
         )}
       </div>
@@ -174,6 +193,15 @@ export default function FileExtractor() {
           </button>
         </div>
       </div>
+
+      {run && showResult && (
+        <RunDialog
+          run={run}
+          onRunChange={setRun}
+          onClose={() => setShowResult(false)}
+          canReview={canExtract}
+        />
+      )}
     </div>
   );
 }

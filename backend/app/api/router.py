@@ -10,6 +10,7 @@ from app.api.endpoints import (
     export,
     extraction,
     notes,
+    runs,
     upload,
 )
 
@@ -21,5 +22,6 @@ api_router.include_router(
 )
 api_router.include_router(notes.router, prefix="/notes", tags=["notes"])
 api_router.include_router(extraction.router, prefix="/extraction", tags=["extraction"])
+api_router.include_router(runs.router, prefix="/runs", tags=["runs"])
 api_router.include_router(upload.router, prefix="/upload", tags=["upload"])
 api_router.include_router(export.router, prefix="/export", tags=["export"])

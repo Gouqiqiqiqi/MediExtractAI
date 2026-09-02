@@ -4,7 +4,7 @@
 
 🔗 **Live demo: [http://140.238.101.112](http://140.238.101.112)** — open, no sign-in, synthetic data only.
 
-A full-stack web application that connects to an existing clinical notes database (or takes uploaded `.txt` / `.docx` / `.pdf` documents), lets a user define an output schema on the fly, and uses an LLM to extract structured rows they can review, correct, and export as CSV, Excel or FHIR JSON.
+A full-stack web application that connects to an existing clinical notes database (or takes uploaded `.txt` / `.docx` / `.pdf` documents), lets a user define an output schema on the fly, and uses an LLM to extract structured rows — which a clinician then corrects and signs off before they are allowed to leave as anything but a draft.
 
 Built by a healthcare data engineer to explore how LLMs can accelerate one of the most manual jobs in clinical data work: turning unstructured narrative notes into usable datasets.
 
@@ -24,7 +24,9 @@ offers a type filter built from the values actually in that column — what coun
 note type is whatever the customer's system puts there, and it differs between
 deployments of the same vendor's software.
 
-Use **View as** in the header to switch between Admin, Clinician and ReadOnly. The roles are enforced by the API, not hidden in the UI — a Clinician really does get a 403 from the data source endpoints.
+Use **View as** in the header to switch between Admin, Clinician and ReadOnly. The roles are enforced by the API, not hidden in the UI — a Clinician really does get a 403 from the data source endpoints, and a ReadOnly viewer sees every run but is given no way to approve one.
+
+A run through the demo: pick a few notes, define a couple of columns, press **Run extraction**. The table appears over the page as a **draft** — correct a value and the model's original answer stays beside it, approve or reject rows, then sign the run off. Try exporting before you sign: the CSV comes out named `-DRAFT` with a review-status column on every row. Everything you did is in **Review**, with the same run, its history and its signature.
 
 The synthetic notes are written to contain what makes clinical extraction hard: negation, ex-smoker versus current smoker, family history that belongs to someone else, and UK dosing abbreviations (`BD`, `OD`, `TDS`, `PRN`).
 
@@ -36,19 +38,47 @@ The synthetic notes are written to contain what makes clinical extraction hard: 
 - **Dynamic schema builder** — define output columns, types and extraction instructions in the UI.
 - **AI extraction** — Google Gemini (free tier) or Azure OpenAI, selected by config. Notes are extracted concurrently behind a bounded semaphore.
 - **Row provenance** — every extracted row carries the note and patient it came from. One note can produce several rows, so this is the only thing that keeps a row attributable.
-- **Editable results table** — review and correct extracted values; provenance columns are read-only.
+- **Review and sign-off** — every extraction is persisted as a *draft*. A clinician corrects what the model got wrong, approves or rejects each row, and signs the run off; signed-off runs are read-only until explicitly reopened. See [The workflow](#the-workflow).
+- **Corrections, not re-runs** — a wrong value is edited in place. The model's original answer is kept beside it, every change is recorded against the person who made it, and one click puts the model's answer back.
 - **File upload** — parse `.txt`, `.doc/.docx`, `.pdf` into plain text.
-- **Export** — CSV, Excel or FHIR JSON.
+- **Gated export** — CSV or Excel, produced from a stored run rather than from what the browser posts. An unsigned run still exports, but labelled: `-DRAFT` in the filename, a review-status column on every row, and a sheet in the workbook saying so.
 - **Role separation** — Admin configures data sources; Clinician browses and extracts; ReadOnly can neither.
 - **Audit trail** — logging of who accessed what and when, with no note content in the logs.
+
+## The workflow
+
+The extraction is not the product; the reviewed dataset is. So the pipeline is shaped like a document review, not a batch job:
+
+```
+select notes (database)  │  upload documents (personal scope)
+            ↓
+  run  →  saved immediately as a DRAFT, every row pending
+            ↓
+  review: correct a value (the model's answer is kept beside it)
+          approve or reject each row · reopen anything already decided
+            ↓                              ↘ wrong schema or wrong notes?
+  sign off (clinician) — rows freeze          re-run: a new run to compare against,
+            ↓                                 never an overwrite
+  export: signed-off runs come out clean; anything else comes out marked DRAFT
+```
+
+Three gates, deliberately kept separate:
+
+| | Gated? | Why |
+|---|---|---|
+| Saving a draft to our database | No | Not saving is what loses corrections and leaves no trail. Saved is not the same as blessed. |
+| Leaving the system (CSV / Excel / downstream) | Yes | This is where data becomes something other people will act on. |
+| Writing back into the hospital system | Not built | Structured data flowing back into a clinical record changes the regulatory position; that is a deliberate decision, not an oversight. |
+
+Approval is enforced by the API, not by the UI: exports are addressed by run id and the server decides what may leave and how the file is labelled. `REQUIRE_SEPARATE_APPROVER` (off in the demo, on in a governed deployment) additionally stops anyone signing off a run they started themselves.
 
 ## Architecture
 
 ```
 React 18 + TypeScript SPA ──▶ nginx ──▶ FastAPI (async)
                                           ├─▶ Gemini API / Azure OpenAI
-                                          ├─▶ App database  (SQLite)      audit log, jobs,
-                                          │                                data source registry
+                                          ├─▶ App database  (SQLite)      runs, rows, revisions,
+                                          │                                audit log, data sources
                                           ├─▶ Notes database (PostgreSQL)  the customer's system,
                                           │                                read-only
                                           └─▶ Local file parsing (PyMuPDF, python-docx)
@@ -122,7 +152,8 @@ Open port **80** in two places — they are independent and both are required:
 | `GEMINI_MODEL` | `gemini-3.5-flash` | See the quota note below before changing |
 | `AI_FALLBACK_MODELS` | Groq, Mistral, then two more Gemini models | Models to rotate to when the one above is rate limited, in order. `provider:model`, or a bare model name for `AI_PROVIDER`'s provider. |
 | `GROQ_API_KEY` / `MISTRAL_API_KEY` | — | Free keys, no card. Blank means that provider is dropped from the chain at startup. |
-| `DATABASE_URL` | SQLite | The app's own database: audit log, jobs, data source registry |
+| `DATABASE_URL` | SQLite | The app's own database: extraction runs, their rows and revisions, audit log, data source registry |
+| `REQUIRE_SEPARATE_APPROVER` | `false` | `true`: the person who ran an extraction may not sign it off. Off in the demo, which has one user. |
 | `NOTES_DATABASE_URL` | falls back to `DATABASE_URL` | The clinical notes database. Registered as the default data source on first start. |
 | `DEMO_ALLOWED_DB_HOSTS` | `notes-db,localhost,127.0.0.1` | Hosts a demo deployment may connect a data source to. Ignored when `DEMO_MODE=false`. |
 
@@ -173,7 +204,11 @@ The failures that ruin a live demo are the quiet ones: the site loads, the notes
 list looks right, and extraction returns nothing because a model was retired or
 yesterday's testing spent the day's quota. So the check presses the button —
 site, bundle, API, data source, role separation, the model chain, and one real
-extraction whose output it inspects. Exit code 0 means the demo is ready.
+extraction whose output it inspects. It then checks the review gate on the
+deployment itself: the extraction was persisted as a draft, an approved-rows
+export of it is refused, a draft export is labelled `DRAFT`. The run it made is
+discarded afterwards — a pre-flight check is not someone's work to review.
+Exit code 0 means the demo is ready.
 
 Extraction is bounded on both ends so a failure is legible rather than a hung
 tab: `AI_REQUEST_TIMEOUT_SECONDS` per model call, `AI_DEADLINE_SECONDS` for the
@@ -198,7 +233,8 @@ would otherwise be a liability:
 
 For a governed deployment the codebase also includes OIDC token validation (RS256/JWKS),
 role-based access control, security headers and CSP, upload size and type limits, and an
-audit log model that never stores note content. `infra/azure/` retains the original Bicep
+audit trail — written for every run, correction, approval and export, in the same
+transaction as the act it records, and never containing note content. `infra/azure/` retains the original Bicep
 templates for a private-endpoint Azure deployment.
 
 ## Project structure
@@ -210,6 +246,7 @@ MediExtractAI/
 │   ├── scripts/        # synthetic notes + seeding
 │   └── tests/
 ├── frontend/src/       # React + TS SPA (api / auth / components / lib / pages)
+│   └── components/Review/   # the review surface: table, sign-off, export, pop-up
 ├── infra/              # dev compose, nginx, Azure Bicep (legacy)
 └── docker-compose.yml  # production: frontend + backend + notes database
 ```

@@ -26,6 +26,27 @@ function detailOf(data: unknown): string | null {
   return null;
 }
 
+/**
+ * A blob-typed request (an export) whose response is an error carries its JSON
+ * message inside the Blob, where detailOf cannot see it. Reading a Blob is
+ * asynchronous, so callers that download files use this instead.
+ */
+export async function errorMessageAsync(
+  error: unknown,
+  fallback: string,
+): Promise<string> {
+  if (error instanceof AxiosError && error.response?.data instanceof Blob) {
+    try {
+      const text = await error.response.data.text();
+      const detail = detailOf(JSON.parse(text));
+      if (detail) return detail;
+    } catch {
+      // Not JSON after all — fall through to the synchronous reading.
+    }
+  }
+  return errorMessage(error, fallback);
+}
+
 export function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof AxiosError) {
     const detail = detailOf(error.response?.data);

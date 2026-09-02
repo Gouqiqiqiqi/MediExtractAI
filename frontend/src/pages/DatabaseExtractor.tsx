@@ -16,17 +16,16 @@ import {
   CheckSquare,
   ChevronLeft,
   ChevronRight,
+  ClipboardCheck,
   Database,
   Play,
   Search,
   Square,
-  Table2,
   X,
 } from 'lucide-react';
 import type {
   ColumnDefinition,
   DataSource,
-  ExtractionResponse,
   NoteFilterOptions,
   NoteFilters,
   NotePreview,
@@ -36,7 +35,7 @@ import { errorMessage } from '../api/errors';
 import { fetchDataSources } from '../api/dataSources';
 import { extractFromDatabase } from '../api/extraction';
 import SchemaBuilder from '../components/SchemaBuilder/SchemaBuilder';
-import DataTable from '../components/DataTable/DataTable';
+import RunDialog from '../components/Review/RunDialog';
 import StepPanel from '../components/common/StepPanel';
 import EmptyState from '../components/common/EmptyState';
 import { SkeletonRows } from '../components/common/Skeleton';
@@ -44,12 +43,19 @@ import NoteFilterBar, {
   activeFilterCount,
   EMPTY_FILTERS,
 } from '../components/NoteBrowser/NoteFilterBar';
-import { saveResult } from '../lib/resultStore';
+import { fetchRun } from '../api/runs';
+import { useRole } from '../auth/RoleContext';
+import { RunStatusChip } from '../components/Review/StatusChip';
+import { runProgress } from '../lib/runProgress';
+import { runsChanged } from '../lib/runEvents';
+import { relativeTime } from '../lib/time';
+import type { RunDetail } from '../types';
 
 const PAGE_SIZE = 20;
 
 export default function DatabaseExtractor() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { canExtract } = useRole();
 
   const [columns, setColumns] = useState<ColumnDefinition[]>([]);
 
@@ -74,7 +80,12 @@ export default function DatabaseExtractor() {
 
   const [previewNote, setPreviewNote] = useState<NotePreview | null>(null);
 
-  const [result, setResult] = useState<ExtractionResponse | null>(null);
+  // The run as the server stored it, and whether its table is currently open
+  // over the page. Two pieces of state rather than one: closing the pop-up must
+  // not lose the run, or the panel offering to reopen it would have nothing to
+  // reopen.
+  const [run, setRun] = useState<RunDetail | null>(null);
+  const [showResult, setShowResult] = useState(false);
   const [extracting, setExtracting] = useState(false);
 
   const selectedSource = sources.find((s) => s.id === sourceId);
@@ -211,9 +222,12 @@ export default function DatabaseExtractor() {
         note_ids: Array.from(selectedIds),
         columns,
       });
-      setResult(res);
-      saveResult(res);
-      toast.success(`Extracted ${res.rows.length} rows from ${res.note_count} notes`);
+      // The backend has already saved this as a draft run; reading it back is
+      // what gives every row its identity, so a correction made in the pop-up
+      // is the same edit the review page would make.
+      setRun(await fetchRun(res.run_id));
+      setShowResult(true);
+      runsChanged();
     } catch (err) {
       // The backend says which models are exhausted and when they return.
       // Long, but every word of it is what the reader needs next.
@@ -535,34 +549,39 @@ export default function DatabaseExtractor() {
           )}
         </StepPanel>
 
-        {/* ── Results ── */}
-        {result && (
+        {/* ── Step 3: the draft this produced ── */}
+        {run && (
           <StepPanel
             index={3}
-            title="Results"
+            title="Review"
             status="done"
-            summary={`${result.rows.length} rows · ${result.note_count} notes`}
-            actions={
-              <Link to="/results" className="btn-outlined">
-                <Table2 size={14} />
-                Review &amp; export
-              </Link>
+            summary={
+              <span className="flex items-center gap-1.5">
+                <RunStatusChip status={runProgress(run).status} />
+                {run.rows.length} row{run.rows.length === 1 ? '' : 's'}
+                <span className="text-outline">·</span>
+                {runProgress(run).pending} pending
+                <span className="text-outline">·</span>
+                {relativeTime(run.created_at)}
+              </span>
             }
-            flush
+            actions={
+              <>
+                <button onClick={() => setShowResult(true)} className="btn-outlined">
+                  <ClipboardCheck size={14} />
+                  Open review
+                </button>
+                <Link to={`/review?run=${run.id}`} className="btn-text">
+                  All runs
+                </Link>
+              </>
+            }
           >
-            <DataTable
-              columns={result.columns}
-              data={result.rows}
-              readOnlyColumns={result.provenance_columns}
-              onDataChange={(rows) => {
-                // Corrections made here have to reach the stored result too,
-                // or the Results page and any export would hand back the
-                // pre-edit values.
-                const updated = { ...result, rows };
-                setResult(updated);
-                saveResult(updated);
-              }}
-            />
+            <p className="text-body-md text-on-surface-variant">
+              Saved on the server as a draft — nothing here has been approved yet.
+              Correct what the model got wrong, then sign it off; only signed-off rows
+              export as reviewed data.
+            </p>
           </StepPanel>
         )}
       </div>
@@ -595,6 +614,15 @@ export default function DatabaseExtractor() {
           </button>
         </div>
       </div>
+
+      {run && showResult && (
+        <RunDialog
+          run={run}
+          onRunChange={setRun}
+          onClose={() => setShowResult(false)}
+          canReview={canExtract}
+        />
+      )}
     </div>
   );
 }

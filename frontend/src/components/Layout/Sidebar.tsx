@@ -1,6 +1,9 @@
+import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Database, FileUp, LayoutDashboard, Plug, Table2 } from 'lucide-react';
+import { ClipboardCheck, Database, FileUp, LayoutDashboard, Plug } from 'lucide-react';
 import { useRole } from '../../auth/RoleContext';
+import { fetchRunStats } from '../../api/runs';
+import { onRunsChanged } from '../../lib/runEvents';
 import type { Role } from '../../lib/demoRole';
 
 interface NavItem {
@@ -28,7 +31,7 @@ const navItems: NavItem[] = [
     roles: ['Admin', 'Clinician'],
     section: 'work',
   },
-  { to: '/results', label: 'Results', icon: Table2, section: 'work' },
+  { to: '/review', label: 'Review', icon: ClipboardCheck, section: 'work' },
   {
     to: '/data-sources',
     label: 'Data Sources',
@@ -46,6 +49,20 @@ const SECTION_LABEL: Record<NavItem['section'], string> = {
 export default function Sidebar() {
   const location = useLocation();
   const { role } = useRole();
+  // How much review is outstanding. Re-read on navigation rather than polled:
+  // the number only changes as a result of something the user just did.
+  const [awaiting, setAwaiting] = useState<number | null>(null);
+
+  useEffect(() => {
+    const read = () =>
+      fetchRunStats()
+        .then((stats) => setAwaiting(stats.awaiting_review))
+        .catch(() => setAwaiting(null));
+    void read();
+    // Also whenever a run is created or signed off, which happens without any
+    // navigation at all — in the pop-up that follows an extraction.
+    return onRunsChanged(() => void read());
+  }, [location.pathname]);
 
   const visible = navItems.filter((item) => !item.roles || item.roles.includes(role));
   const sections: NavItem['section'][] = ['work', 'configure'];
@@ -94,6 +111,14 @@ export default function Sidebar() {
                     >
                       <Icon size={16} strokeWidth={isActive ? 2.2 : 1.8} className="shrink-0" />
                       <span className="truncate">{label}</span>
+                      {to === '/review' && awaiting !== null && awaiting > 0 && (
+                        <span
+                          className="ml-auto badge-warning tabular"
+                          title={`${awaiting} run${awaiting === 1 ? '' : 's'} awaiting review`}
+                        >
+                          {awaiting}
+                        </span>
+                      )}
                     </Link>
                   );
                 })}

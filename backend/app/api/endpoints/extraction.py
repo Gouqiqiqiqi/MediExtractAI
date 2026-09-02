@@ -17,6 +17,7 @@ from app.models.schemas import (
     ModelStatus,
     UserClaims,
 )
+from app.services import run_service
 from app.services.extraction_service import ExtractionService
 
 router = APIRouter()
@@ -110,35 +111,55 @@ async def extract_from_database(
     ]
 
     extractor = ExtractionService.instance()
+    models_used: set[str] = set()
     try:
         rows = await extractor.extract(
             texts=[n.note_text for n in notes],
             columns=body.columns,
             provenance=provenance,
+            models_used=models_used,
         )
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
+    columns = [
+        _provenance_column(note_col, "Identifier of the source note this row came from"),
+        _provenance_column(patient_col, "Patient identifier on the source note"),
+        *body.columns,
+    ]
+
+    # Persisted before it is returned. The result is a draft either way, but a
+    # draft that only exists in a browser tab is one refresh from gone — and
+    # with it every correction anyone had started making.
+    run = await run_service.create_run(
+        session,
+        user,
+        source_kind="database",
+        source_id=repo.source.id,
+        source_label=repo.source.name,
+        columns=columns,
+        provenance_columns=[note_col, patient_col],
+        rows=rows,
+        note_count=len(notes),
+        models_used=models_used,
+        note_key=note_col,
+        patient_key=patient_col,
+    )
+
     return ExtractionResponse(
-        columns=[
-            _provenance_column(
-                note_col, "Identifier of the source note this row came from"
-            ),
-            _provenance_column(
-                patient_col, "Patient identifier on the source note"
-            ),
-            *body.columns,
-        ],
+        columns=columns,
         rows=rows,
         source="database",
         note_count=len(notes),
         provenance_columns=[note_col, patient_col],
+        run_id=run.id,
     )
 
 
 @router.post("/from-text", response_model=ExtractionResponse)
 async def extract_from_text(
     body: FileExtractionRequest,
+    session: DbSession,
     user: UserClaims = Depends(require_role(Role.ADMIN, Role.CLINICIAN)),
 ):
     """Extract structured data from raw text (e.g. pasted or from an uploaded file)."""
@@ -155,24 +176,45 @@ async def extract_from_text(
     )
 
     extractor = ExtractionService.instance()
+    models_used: set[str] = set()
     try:
         rows = await extractor.extract(
             texts=[body.text],
             columns=body.columns,
             provenance=[{document_col: body.source_name}],
+            models_used=models_used,
         )
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
+    columns = [
+        _provenance_column(document_col, "Document this row was extracted from"),
+        *body.columns,
+    ]
+
+    # Recorded as source_kind="upload", and that distinction is load-bearing:
+    # a row from here points at a file on someone's machine, not at a note in a
+    # system anyone can read back. The review UI says so, because provenance
+    # that cannot be re-checked should not be presented as if it could.
+    run = await run_service.create_run(
+        session,
+        user,
+        source_kind="upload",
+        source_id="",
+        source_label=body.source_name,
+        columns=columns,
+        provenance_columns=[document_col],
+        rows=rows,
+        note_count=1,
+        models_used=models_used,
+        note_key=document_col,
+    )
+
     return ExtractionResponse(
-        columns=[
-            _provenance_column(
-                document_col, "Document this row was extracted from"
-            ),
-            *body.columns,
-        ],
+        columns=columns,
         rows=rows,
         source="text",
         note_count=1,
         provenance_columns=[document_col],
+        run_id=run.id,
     )
