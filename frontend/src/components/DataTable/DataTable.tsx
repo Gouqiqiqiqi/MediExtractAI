@@ -16,9 +16,21 @@ interface Props {
   columns: ColumnDefinition[];
   data: Record<string, unknown>[];
   onDataChange?: (data: Record<string, unknown>[]) => void;
+  /**
+   * Columns rendered as read-only text. Used for provenance — which note a row
+   * came from is a record of fact, not a value a reviewer should be able to
+   * edit away from the note it describes.
+   */
+  readOnlyColumns?: string[];
 }
 
-export default function DataTable({ columns, data, onDataChange }: Props) {
+export default function DataTable({
+  columns,
+  data,
+  onDataChange,
+  readOnlyColumns = [],
+}: Props) {
+  const readOnly = useMemo(() => new Set(readOnlyColumns), [readOnlyColumns]);
   const [tableData, setTableData] = useState(data);
 
   const updateCell = (rowIndex: number, columnId: string, value: unknown) => {
@@ -44,19 +56,28 @@ export default function DataTable({ columns, data, onDataChange }: Props) {
         header: () => (
           <div>
             <span className="font-medium text-on-surface">{col.name}</span>
-            <span className="text-label-md text-on-surface-variant ml-1">({col.data_type})</span>
+            {readOnly.has(col.name) ? (
+              <span className="text-label-md text-on-surface-variant ml-1">(source)</span>
+            ) : (
+              <span className="text-label-md text-on-surface-variant ml-1">({col.data_type})</span>
+            )}
           </div>
         ),
-        cell: ({ row, column }: { row: { index: number; original: Record<string, unknown> }; column: { id: string } }) => (
-          <EditableCell
-            value={row.original[column.id]}
-            onChange={(val) => updateCell(row.index, column.id, val)}
-            dataType={col.data_type}
-          />
-        ),
+        cell: ({ row, column }: { row: { index: number; original: Record<string, unknown> }; column: { id: string } }) =>
+          readOnly.has(col.name) ? (
+            <span className="text-on-surface-variant font-mono text-label-md whitespace-nowrap">
+              {String(row.original[column.id] ?? '')}
+            </span>
+          ) : (
+            <EditableCell
+              value={row.original[column.id]}
+              onChange={(val) => updateCell(row.index, column.id, val)}
+              dataType={col.data_type}
+            />
+          ),
       })),
     ],
-    [columns, tableData],
+    [columns, tableData, readOnly],
   );
 
   const table = useReactTable({

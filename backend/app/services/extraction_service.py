@@ -125,12 +125,32 @@ class ExtractionService:
         self,
         texts: list[str],
         columns: list[ColumnDefinition],
+        provenance: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Extract structured rows from one or more free-text notes."""
+        """Extract structured rows from one or more free-text notes.
+
+        ``provenance``, when given, must be the same length as ``texts``. Its
+        entry for a note is merged into every row that note produces, so the
+        link back to the source survives however the rows are later reordered.
+
+        Attaching it here rather than at the end is deliberate: a single note
+        can yield several rows, so the caller cannot reconstruct the mapping
+        from the returned list alone.
+        """
+        if provenance is not None and len(provenance) != len(texts):
+            raise ValueError(
+                f"provenance has {len(provenance)} entries for {len(texts)} texts"
+            )
+
         all_rows: list[dict[str, Any]] = []
         for i, text in enumerate(texts):
             logger.info("Extracting note %d/%d (%d chars)", i + 1, len(texts), len(text))
             rows = await self._extract_single(text, columns)
+            if provenance is not None:
+                source = provenance[i]
+                # Provenance first so a hallucinated key of the same name in the
+                # model output cannot overwrite it.
+                rows = [{**source, **row, **source} for row in rows]
             all_rows.extend(rows)
         return all_rows
 

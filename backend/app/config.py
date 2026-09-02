@@ -51,11 +51,25 @@ class Settings(BaseSettings):
     azure_client_secret: str = ""
     azure_authority: str = ""
 
-    # ── Database ──
-    # Defaults to a local SQLite file so the app runs with zero external services.
+    # ── Database (application metadata) ──
+    # Audit log, extraction jobs, saved schemas. Defaults to a local SQLite file
+    # so the app runs with zero external services.
     database_url: str = "sqlite+aiosqlite:///./data/mediextract.db"
 
+    # ── Source notes database (the customer's system) ──
+    # In a real deployment the clinical notes live in a system we do not own —
+    # a hospital SQL Server, a data-warehouse Postgres — and we get read-only
+    # credentials to it. Keeping it separate from database_url means the app's
+    # own metadata never has to live inside the customer's estate.
+    # Falls back to database_url when unset (single-database dev setups).
+    notes_database_url: str = ""
+
     # ── Derived ──
+    @property
+    def notes_db_url(self) -> str:
+        """Connection string for the source notes database."""
+        return self.notes_database_url or self.database_url
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

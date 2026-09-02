@@ -8,8 +8,7 @@ import type {
   ExtractionResponse,
 } from '../types';
 import { extractFromDatabase, extractFromText } from '../api/extraction';
-
-const STORAGE_KEY = 'mediextract:latest_result';
+import { saveResult } from '../lib/resultStore';
 
 export function useExtraction() {
   const [result, setResult] = useState<ExtractionResponse | null>(null);
@@ -23,11 +22,7 @@ export function useExtraction() {
       try {
         const res = await extractFromDatabase({ note_ids: noteIds, columns });
         setResult(res);
-        // Persist for Results page
-        sessionStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify({ columns: res.columns, rows: res.rows }),
-        );
+        saveResult(res); // persist for the Results page
         return res;
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Extraction failed';
@@ -47,10 +42,7 @@ export function useExtraction() {
       try {
         const res = await extractFromText({ text, columns });
         setResult(res);
-        sessionStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify({ columns: res.columns, rows: res.rows }),
-        );
+        saveResult(res);
         return res;
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Extraction failed';

@@ -79,13 +79,30 @@ class FileExtractionRequest(BaseModel):
     """Request to extract structured data from free text."""
     text: str = Field(..., min_length=1, max_length=500_000)
     columns: list[ColumnDefinition] = Field(..., min_length=1, max_length=50)
+    # Where the text came from — an uploaded filename, typically. Recorded
+    # against every row so a result can always be traced back to its source.
+    source_name: str = Field(default="Pasted text", max_length=255)
 
 
 class ExtractionResponse(BaseModel):
+    """Extraction results.
+
+    ``columns`` leads with provenance columns (see ``provenance_columns``)
+    followed by the user's requested schema. Provenance travels *inside* each
+    row rather than alongside it, so the link between a row and the note it
+    came from survives sorting, editing and export to CSV.
+
+    This matters because one note can yield several rows: a row's position in
+    the list says nothing about which note produced it.
+    """
     columns: list[ColumnDefinition]
     rows: list[dict[str, Any]]
     source: str
     note_count: int
+    # Names of the leading columns that carry provenance rather than extracted
+    # data. The UI renders these read-only — they are a record of where the
+    # data came from, not a value a reviewer should be able to correct.
+    provenance_columns: list[str] = Field(default_factory=list)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

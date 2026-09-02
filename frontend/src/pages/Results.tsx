@@ -5,29 +5,15 @@
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Download, FileSpreadsheet, FileJson } from 'lucide-react';
-import type { ColumnDefinition } from '../types';
 import { exportCsv, exportExcel } from '../api/export';
 import DataTable from '../components/DataTable/DataTable';
-
-const STORAGE_KEY = 'mediextract:latest_result';
-
-interface SavedResult {
-  columns: ColumnDefinition[];
-  rows: Record<string, unknown>[];
-}
+import { loadResult, saveEditedRows, type SavedResult } from '../lib/resultStore';
 
 export default function Results() {
   const [result, setResult] = useState<SavedResult | null>(null);
 
   useEffect(() => {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      try {
-        setResult(JSON.parse(raw));
-      } catch {
-        // corrupted
-      }
-    }
+    setResult(loadResult());
   }, []);
 
   const handleExportCsv = async () => {
@@ -92,10 +78,11 @@ export default function Results() {
       <DataTable
         columns={result.columns}
         data={result.rows}
+        readOnlyColumns={result.provenance_columns}
         onDataChange={(rows) => {
           const updated = { ...result, rows };
           setResult(updated);
-          sessionStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+          saveEditedRows(updated);
         }}
       />
     </div>

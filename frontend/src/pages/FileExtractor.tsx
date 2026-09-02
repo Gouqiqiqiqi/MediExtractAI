@@ -11,6 +11,7 @@ import FileUpload from '../components/FileUpload/FileUpload';
 import SchemaBuilder from '../components/SchemaBuilder/SchemaBuilder';
 import NoteViewer from '../components/NoteViewer/NoteViewer';
 import DataTable from '../components/DataTable/DataTable';
+import { saveResult } from '../lib/resultStore';
 
 export default function FileExtractor() {
   const [columns, setColumns] = useState<ColumnDefinition[]>([]);
@@ -37,8 +38,13 @@ export default function FileExtractor() {
 
     setExtracting(true);
     try {
-      const res = await extractFromText({ text, columns });
+      const res = await extractFromText({
+        text,
+        columns,
+        source_name: filename || undefined,
+      });
       setResult(res);
+      saveResult(res);
       toast.success(`Extracted ${res.rows.length} rows`);
     } catch {
       toast.error('Extraction failed — check API logs');
@@ -82,7 +88,11 @@ export default function FileExtractor() {
 
       {/* Step 4: Results */}
       {result && (
-        <DataTable columns={result.columns} data={result.rows} />
+        <DataTable
+          columns={result.columns}
+          data={result.rows}
+          readOnlyColumns={result.provenance_columns}
+        />
       )}
     </div>
   );

@@ -11,6 +11,7 @@ import { fetchNotes } from '../api/notes';
 import { extractFromDatabase } from '../api/extraction';
 import SchemaBuilder from '../components/SchemaBuilder/SchemaBuilder';
 import DataTable from '../components/DataTable/DataTable';
+import { saveResult } from '../lib/resultStore';
 import Loading from '../components/common/Loading';
 
 export default function DatabaseExtractor() {
@@ -89,6 +90,7 @@ export default function DatabaseExtractor() {
         columns,
       });
       setResult(res);
+      saveResult(res);
       toast.success(`Extracted ${res.rows.length} rows from ${res.note_count} notes`);
     } catch {
       toast.error('Extraction failed — check API logs');
@@ -316,7 +318,11 @@ export default function DatabaseExtractor() {
 
       {/* Step 4: Results */}
       {result && (
-        <DataTable columns={result.columns} data={result.rows} />
+        <DataTable
+          columns={result.columns}
+          data={result.rows}
+          readOnlyColumns={result.provenance_columns}
+        />
       )}
     </div>
   );

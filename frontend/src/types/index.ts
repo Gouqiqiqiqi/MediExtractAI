@@ -48,13 +48,22 @@ export interface ExtractionRequest {
 export interface FileExtractionRequest {
   text: string;
   columns: ColumnDefinition[];
+  /** Where the text came from — an uploaded filename, typically. */
+  source_name?: string;
 }
 
 export interface ExtractionResponse {
+  /** Provenance columns first, then the user's requested schema. */
   columns: ColumnDefinition[];
   rows: Record<string, unknown>[];
   source: string;
   note_count: number;
+  /**
+   * Names of the leading columns that record where a row came from rather than
+   * what was extracted. Rendered read-only: a reviewer corrects extracted
+   * values, never the record of which note produced them.
+   */
+  provenance_columns?: string[];
 }
 
 // ── Upload ──
