@@ -14,10 +14,15 @@ Built by a healthcare data engineer to explore how LLMs can accelerate one of th
 
 The demo carries two data sources with deliberately different schemas, so the same UI reads both without a code change:
 
-| Data source | Table | note id | patient | note text |
-|---|---|---|---|---|
-| Demo clinical notes | `medical_notes` | `id` | `patient_id` | `note_text` |
-| Clinic Letters (legacy) | `clinical_documents` | `doc_id` | `mrn` | `doc_body` |
+| Data source | Table | note id | patient | note text | note type |
+|---|---|---|---|---|---|
+| Demo clinical notes | `medical_notes` | `id` | `patient_id` | `note_text` | `specialty` |
+| Clinic Letters (legacy) | `clinical_documents` | `doc_id` | `mrn` | `doc_body` | `service` |
+
+The note type column is optional in the mapping. Where a source has one, the browser
+offers a type filter built from the values actually in that column — what counts as a
+note type is whatever the customer's system puts there, and it differs between
+deployments of the same vendor's software.
 
 Use **View as** in the header to switch between Admin, Clinician and ReadOnly. The roles are enforced by the API, not hidden in the UI — a Clinician really does get a 403 from the data source endpoints.
 
@@ -27,6 +32,7 @@ The synthetic notes are written to contain what makes clinical extraction hard: 
 
 - **Data sources** — register a clinical database and map its columns to what the app needs. No two hospitals name their notes table the same way, so the mapping is configuration rather than a code change.
 - **Dialect portability** — queries are built with SQLAlchemy Core, so the same code runs against PostgreSQL, SQL Server or a SQLite extract.
+- **Note browser with filters** — narrow by note type, clinician and date range before searching the text. Clinical systems keep nursing, outpatient and inpatient notes in one place, so filtering down is how anyone actually finds a note; keyword search is the fallback, not the opening move.
 - **Dynamic schema builder** — define output columns, types and extraction instructions in the UI.
 - **AI extraction** — Google Gemini (free tier) or Azure OpenAI, selected by config. Notes are extracted concurrently behind a bounded semaphore.
 - **Row provenance** — every extracted row carries the note and patient it came from. One note can produce several rows, so this is the only thing that keeps a row attributable.

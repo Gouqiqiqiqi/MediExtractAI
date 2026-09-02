@@ -28,6 +28,7 @@ authentication disabled must not double as an open database proxy.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import urllib.parse
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ from typing import NamedTuple
 
 from sqlalchemy import (
     Column,
+    distinct,
     Date,
     MetaData,
     String,
@@ -46,7 +48,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.config import Settings
-from app.models.schemas import NotePreview
+from app.models.schemas import NoteFilterOptions, NotePreview
 
 logger = logging.getLogger("mediextract.services.database")
 
@@ -79,6 +81,8 @@ class SourceConfig:
     col_date: str
     col_author: str
     col_note_text: str
+    # Empty when the source has no note-type column.
+    col_note_type: str = ""
 
     @property
     def table_key(self) -> tuple:
@@ -90,6 +94,7 @@ class SourceConfig:
             self.col_date,
             self.col_author,
             self.col_note_text,
+            self.col_note_type,
         )
 
 
@@ -168,15 +173,18 @@ def _get_table(cfg: SourceConfig) -> Table:
         name = cfg.table_name
         if "." in name:  # e.g. dbo.ClinicalDocument
             schema, name = name.split(".", 1)
-        table = Table(
-            name,
-            MetaData(schema=schema),
+        columns = [
             Column(cfg.col_id, String(255), primary_key=True),
             Column(cfg.col_patient_id, String(255)),
             Column(cfg.col_date, Date),
             Column(cfg.col_author, String(255)),
             Column(cfg.col_note_text, Text),
-        )
+        ]
+        # Only reflect the note-type column when the source actually maps one —
+        # naming a column that does not exist would break every query.
+        if cfg.col_note_type:
+            columns.append(Column(cfg.col_note_type, String(255)))
+        table = Table(name, MetaData(schema=schema), *columns)
         _tables[cfg.table_key] = table
     return table
 
@@ -210,6 +218,11 @@ class NotesRepository:
             patient_id=str(getattr(row, cfg.col_patient_id, "") or ""),
             date=str(getattr(row, cfg.col_date, "") or ""),
             author=str(getattr(row, cfg.col_author, "") or ""),
+            note_type=(
+                str(getattr(row, cfg.col_note_type, "") or "")
+                if cfg.col_note_type
+                else None
+            ),
             text_preview=full_text[:PREVIEW_CHARS],
             char_count=len(full_text),
         )
@@ -217,31 +230,69 @@ class NotesRepository:
     def _preview_select(self):
         c = self._c
         cfg = self._cfg
-        return select(
+        cols = [
             c[cfg.col_id],
             c[cfg.col_patient_id],
             c[cfg.col_date],
             c[cfg.col_author],
             c[cfg.col_note_text],
-        )
+        ]
+        if cfg.col_note_type:
+            cols.append(c[cfg.col_note_type])
+        return select(*cols)
+
+    def _filters(
+        self,
+        search: str | None,
+        note_type: str | None,
+        author: str | None,
+        date_from: dt.date | None,
+        date_to: dt.date | None,
+    ) -> list:
+        """Build the WHERE clauses shared by the count and the page query.
+
+        Narrowing by type, clinician and date is how someone actually finds a
+        note — full-text search is the last resort, not the first move. The
+        clauses are assembled once so the count can never drift from the rows.
+        """
+        cfg = self._cfg
+        c = self._c
+        clauses = []
+
+        if search:
+            # ilike compiles to LOWER(x) LIKE LOWER(y) where there is no native
+            # case-insensitive operator, so it behaves the same everywhere.
+            clauses.append(c[cfg.col_note_text].ilike(f"%{search}%"))
+        if note_type and cfg.col_note_type:
+            clauses.append(c[cfg.col_note_type] == note_type)
+        if author:
+            clauses.append(c[cfg.col_author] == author)
+        if date_from is not None:
+            clauses.append(c[cfg.col_date] >= date_from)
+        if date_to is not None:
+            clauses.append(c[cfg.col_date] <= date_to)
+
+        return clauses
 
     async def list_notes(
         self,
         page: int = 1,
         page_size: int = 20,
         search: str | None = None,
+        note_type: str | None = None,
+        author: str | None = None,
+        date_from: dt.date | None = None,
+        date_to: dt.date | None = None,
     ) -> tuple[list[NotePreview], int]:
-        """Return paginated note previews."""
+        """Return paginated note previews matching the filters."""
         cfg = self._cfg
+        clauses = self._filters(search, note_type, author, date_from, date_to)
+
         count_stmt = select(func.count()).select_from(self._table)
         page_stmt = self._preview_select()
-
-        if search:
-            # ilike compiles to LOWER(x) LIKE LOWER(y) where there is no native
-            # case-insensitive operator, so it behaves the same everywhere.
-            condition = self._c[cfg.col_note_text].ilike(f"%{search}%")
-            count_stmt = count_stmt.where(condition)
-            page_stmt = page_stmt.where(condition)
+        for clause in clauses:
+            count_stmt = count_stmt.where(clause)
+            page_stmt = page_stmt.where(clause)
 
         page_stmt = (
             page_stmt.order_by(self._c[cfg.col_date].desc())
@@ -254,6 +305,45 @@ class NotesRepository:
             rows = (await conn.execute(page_stmt)).all()
 
         return [self._preview(r) for r in rows], total
+
+    async def filter_options(self, limit: int = 200) -> NoteFilterOptions:
+        """The values present in this source, for populating the filter menus.
+
+        Read from the data, not hard-coded: what counts as a note type is
+        whatever the customer's system happens to put in that column, and it
+        differs between deployments of the same vendor's software.
+        """
+        cfg = self._cfg
+        c = self._c
+
+        async with self._engine.connect() as conn:
+            authors = (
+                await conn.execute(
+                    select(distinct(c[cfg.col_author]))
+                    .where(c[cfg.col_author].isnot(None))
+                    .order_by(c[cfg.col_author])
+                    .limit(limit)
+                )
+            ).scalars().all()
+
+            note_types: list[str] = []
+            if cfg.col_note_type:
+                note_types = list(
+                    (
+                        await conn.execute(
+                            select(distinct(c[cfg.col_note_type]))
+                            .where(c[cfg.col_note_type].isnot(None))
+                            .order_by(c[cfg.col_note_type])
+                            .limit(limit)
+                        )
+                    ).scalars().all()
+                )
+
+        return NoteFilterOptions(
+            note_types=[str(t) for t in note_types if str(t).strip()],
+            authors=[str(a) for a in authors if str(a).strip()],
+            has_note_type=bool(cfg.col_note_type),
+        )
 
     async def get_note(self, note_id: str) -> NotePreview | None:
         stmt = self._preview_select().where(self._c[self._cfg.col_id] == note_id)

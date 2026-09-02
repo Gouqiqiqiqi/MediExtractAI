@@ -27,6 +27,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
 
     app_database.init_engine(settings)
     await app_database.create_tables()
+    await app_database.ensure_columns()
     async with app_database.session_factory()() as session:
         await data_source_service.ensure_bootstrap_source(session, settings)
 

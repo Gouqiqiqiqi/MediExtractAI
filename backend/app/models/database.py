@@ -90,6 +90,10 @@ class DataSource(Base):
     col_date: Mapped[str] = mapped_column(String(255), default="note_date")
     col_author: Mapped[str] = mapped_column(String(255), default="author")
     col_note_text: Mapped[str] = mapped_column(String(255), default="note_text")
+    # Optional. Clinical systems keep every kind of note together — nursing,
+    # outpatient, inpatient — and the useful first move is to narrow to a type
+    # rather than search the lot. Blank means this source has no such column.
+    col_note_type: Mapped[str] = mapped_column(String(255), default="")
 
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[str] = mapped_column(String(255), default="")

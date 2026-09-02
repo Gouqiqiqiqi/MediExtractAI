@@ -54,8 +54,21 @@ class NotePreview(BaseModel):
     patient_id: str | None = None
     date: str | None = None
     author: str | None = None
+    note_type: str | None = None
     text_preview: str = Field(default="", max_length=500)
     char_count: int = 0
+
+
+class NoteFilterOptions(BaseModel):
+    """The values a user can actually filter by in this data source.
+
+    Read from the data rather than hard-coded: what counts as a note type is
+    whatever the customer's system puts in that column.
+    """
+
+    note_types: list[str] = Field(default_factory=list)
+    authors: list[str] = Field(default_factory=list)
+    has_note_type: bool = False
 
 
 class NoteListResponse(BaseModel):
@@ -89,6 +102,10 @@ class ColumnMapping(BaseModel):
     date: str = Field(default="note_date", pattern=IDENTIFIER_RE)
     author: str = Field(default="author", pattern=IDENTIFIER_RE)
     note_text: str = Field(default="note_text", pattern=IDENTIFIER_RE)
+    # Optional: the column holding the kind of note (nursing, outpatient,
+    # inpatient, a specialty). Empty when the source has no such column, in
+    # which case the type filter is simply not offered.
+    note_type: str = Field(default="", pattern=rf"^$|{IDENTIFIER_RE[1:]}")
 
 
 class DataSourceBase(BaseModel):

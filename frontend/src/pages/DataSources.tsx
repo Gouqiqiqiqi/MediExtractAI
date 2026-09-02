@@ -41,6 +41,7 @@ const EMPTY_MAPPING: ColumnMapping = {
   date: 'note_date',
   author: 'author',
   note_text: 'note_text',
+  note_type: '',
 };
 
 const EMPTY_FORM: DataSourceCreate = {
@@ -62,6 +63,11 @@ const MAPPING_FIELDS: { key: keyof ColumnMapping; label: string; hint: string }[
   { key: 'date', label: 'Note date', hint: 'When it was written' },
   { key: 'author', label: 'Author', hint: 'Clinician who wrote it' },
   { key: 'note_text', label: 'Note text', hint: 'The free text we extract from' },
+  {
+    key: 'note_type',
+    label: 'Note type (optional)',
+    hint: 'Nursing, outpatient, specialty — leave blank if none',
+  },
 ];
 
 export default function DataSources() {
@@ -321,10 +327,12 @@ export default function DataSources() {
                         Schema mapping · <span className="mono">{ds.table_name}</span>
                       </p>
                       <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
-                        {MAPPING_FIELDS.map(({ key, label }) => (
+                        {MAPPING_FIELDS.filter(
+                          ({ key }) => key !== 'note_type' || ds.columns.note_type,
+                        ).map(({ key, label }) => (
                           <div key={key} className="contents">
                             <dt className="text-label-md text-on-surface-variant whitespace-nowrap">
-                              {label}
+                              {label.replace(' (optional)', '')}
                             </dt>
                             <dd className="mono truncate">→ {ds.columns[key]}</dd>
                           </div>

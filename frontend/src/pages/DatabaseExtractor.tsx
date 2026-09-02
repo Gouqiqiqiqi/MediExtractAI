@@ -23,8 +23,15 @@ import {
   Table2,
   X,
 } from 'lucide-react';
-import type { ColumnDefinition, DataSource, ExtractionResponse, NotePreview } from '../types';
-import { fetchNotes } from '../api/notes';
+import type {
+  ColumnDefinition,
+  DataSource,
+  ExtractionResponse,
+  NoteFilterOptions,
+  NoteFilters,
+  NotePreview,
+} from '../types';
+import { fetchNoteFilterOptions, fetchNotes } from '../api/notes';
 import { fetchDataSources } from '../api/dataSources';
 import { extractFromDatabase } from '../api/extraction';
 import SchemaBuilder from '../components/SchemaBuilder/SchemaBuilder';
@@ -32,6 +39,10 @@ import DataTable from '../components/DataTable/DataTable';
 import StepPanel from '../components/common/StepPanel';
 import EmptyState from '../components/common/EmptyState';
 import { SkeletonRows } from '../components/common/Skeleton';
+import NoteFilterBar, {
+  activeFilterCount,
+  EMPTY_FILTERS,
+} from '../components/NoteBrowser/NoteFilterBar';
 import { saveResult } from '../lib/resultStore';
 
 const PAGE_SIZE = 20;
@@ -46,13 +57,16 @@ export default function DatabaseExtractor() {
 
   const [notes, setNotes] = useState<NotePreview[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [searchTerm, setSearchTerm] = useState(searchParams.get('q') ?? '');
-  // The term the currently displayed page was fetched with. Paging must reuse
-  // it: typing a new term without pressing Search and then hitting Next would
-  // otherwise fetch page 2 of a different query.
-  const [activeQuery, setActiveQuery] = useState('');
+  const [filters, setFilters] = useState<NoteFilters>({
+    ...EMPTY_FILTERS,
+    search: searchParams.get('q') ?? '',
+  });
+  // The filters the currently displayed page was fetched with. Paging must
+  // reuse them: editing a filter without pressing Apply and then hitting Next
+  // would otherwise fetch page 2 of a different query.
+  const [appliedFilters, setAppliedFilters] = useState<NoteFilters>(EMPTY_FILTERS);
+  const [filterOptions, setFilterOptions] = useState<NoteFilterOptions | null>(null);
   const [loadingNotes, setLoadingNotes] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
   const [totalNotes, setTotalNotes] = useState(0);
   const [page, setPage] = useState(1);
 
@@ -74,12 +88,11 @@ export default function DatabaseExtractor() {
       .catch(() => toast.error('Could not load data sources'));
   }, []);
 
-  const loadNotes = async (p = 1, term = searchTerm) => {
+  const loadNotes = async (p = 1, applied: NoteFilters = filters) => {
     setLoadingNotes(true);
-    setHasSearched(true);
     try {
-      const data = await fetchNotes(p, PAGE_SIZE, term || undefined, sourceId || undefined);
-      setActiveQuery(term);
+      const data = await fetchNotes(p, PAGE_SIZE, applied, sourceId || undefined);
+      setAppliedFilters(applied);
       setNotes(data.items);
       setTotalNotes(data.total);
       setPage(p);
@@ -90,17 +103,23 @@ export default function DatabaseExtractor() {
     }
   };
 
-  // ── Search handed over from the header ──
-  // The header search navigates here with ?q=…; consume it once a source is
-  // known, then clear it so a later back-navigation does not re-run the query.
+  // ── When a source is chosen: load its filter values and list everything ──
+  // Listing on arrival rather than making the user press Search first: the
+  // notes are the point of the page, and an empty table teaches nothing about
+  // what is in there.
   useEffect(() => {
+    if (!sourceId) return;
+    fetchNoteFilterOptions(sourceId)
+      .then(setFilterOptions)
+      .catch(() => setFilterOptions(null));
+
     const q = searchParams.get('q');
-    if (q === null || !sourceId) return;
-    setSearchTerm(q);
-    void loadNotes(1, q);
-    setSearchParams({}, { replace: true });
+    const initial: NoteFilters = { ...EMPTY_FILTERS, search: q ?? '' };
+    setFilters(initial);
+    void loadNotes(1, initial);
+    if (q !== null) setSearchParams({}, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, sourceId]);
+  }, [sourceId, searchParams]);
 
   // A note ID from one system means nothing in another, so changing source
   // must not carry a stale selection across.
@@ -109,9 +128,10 @@ export default function DatabaseExtractor() {
     setSelectedIds(new Set());
     setNotes([]);
     setPreviewNote(null);
-    setHasSearched(false);
     setTotalNotes(0);
-    setActiveQuery('');
+    setFilters(EMPTY_FILTERS);
+    setAppliedFilters(EMPTY_FILTERS);
+    setFilterOptions(null);
   };
 
   const toggle = (id: string) => {
@@ -163,6 +183,7 @@ export default function DatabaseExtractor() {
   };
 
   const lastPage = Math.max(1, Math.ceil(totalNotes / PAGE_SIZE));
+  const appliedActive = activeFilterCount(appliedFilters);
 
   return (
     <div className="max-w-6xl mx-auto pb-20">
@@ -237,79 +258,74 @@ export default function DatabaseExtractor() {
           index={2}
           title="Select notes"
           status={
-            selectedIds.size > 0 ? 'done' : hasSearched || schemaReady ? 'active' : 'todo'
+            selectedIds.size > 0 ? 'done' : notes.length > 0 || schemaReady ? 'active' : 'todo'
           }
           summary={
             selectedIds.size > 0
-              ? `${selectedIds.size} selected`
+              ? `${selectedIds.size} of ${totalNotes} selected`
               : totalNotes > 0
-                ? `${totalNotes} available`
+                ? `${totalNotes} note${totalNotes === 1 ? '' : 's'}${
+                    appliedActive > 0 ? ' matching' : ''
+                  }`
                 : undefined
           }
           actions={
-            <>
-              {selectedIds.size > 0 && (
-                <button onClick={() => setSelectedIds(new Set())} className="btn-text">
-                  <X size={14} />
-                  Clear
-                </button>
-              )}
-              <div className="relative">
-                <Search
-                  size={14}
-                  className="absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none"
-                />
-                <input
-                  type="search"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && loadNotes(1)}
-                  placeholder="Keyword, patient ID, author…"
-                  className="input-field py-1.5 pl-8 w-64"
-                  aria-label="Search notes"
-                />
-              </div>
-              <button
-                onClick={() => loadNotes(1)}
-                disabled={sources.length === 0}
-                className="btn-filled"
-              >
-                Search
+            selectedIds.size > 0 ? (
+              <button onClick={() => setSelectedIds(new Set())} className="btn-text">
+                <X size={14} />
+                Clear selection
               </button>
-            </>
+            ) : undefined
           }
           flush
         >
+          <NoteFilterBar
+            options={filterOptions}
+            filters={filters}
+            onChange={setFilters}
+            onApply={() => loadNotes(1, filters)}
+            onReset={() => {
+              setFilters(EMPTY_FILTERS);
+              void loadNotes(1, EMPTY_FILTERS);
+            }}
+            disabled={sources.length === 0 || loadingNotes}
+          />
+
           {loadingNotes ? (
             <SkeletonRows rows={6} className="py-2" />
-          ) : !hasSearched ? (
-            <EmptyState
-              icon={Search}
-              title="Nothing loaded yet"
-              description="Search to browse this data source, or leave the box empty and press Search to list everything."
-            />
           ) : notes.length === 0 ? (
             <EmptyState
               icon={Search}
-              title="No notes matched"
+              title={appliedActive > 0 ? 'No notes match these filters' : 'No notes here'}
               description={
-                searchTerm ? (
-                  <>
-                    Nothing in this source contains{' '}
-                    <span className="mono">{searchTerm}</span>.
-                  </>
-                ) : (
-                  'This data source returned no rows.'
-                )
+                appliedActive > 0
+                  ? 'Widen the date range, or clear a filter.'
+                  : 'This data source returned no rows.'
+              }
+              action={
+                appliedActive > 0 ? (
+                  <button
+                    onClick={() => {
+                      setFilters(EMPTY_FILTERS);
+                      void loadNotes(1, EMPTY_FILTERS);
+                    }}
+                    className="btn-outlined"
+                  >
+                    Clear filters
+                  </button>
+                ) : undefined
               }
             />
           ) : (
             <div className="flex">
               <div className="flex-1 min-w-0">
-                <table className="w-full">
+                {/* table-fixed with explicit widths: in auto layout the browser
+                    sizes columns by content, so max-width on a cell is ignored
+                    and a long author name pushes the preview past the panel. */}
+                <table className="w-full table-fixed">
                   <thead>
                     <tr className="text-left border-b border-outline bg-surface-dim">
-                      <th className="w-10 px-3 py-2">
+                      <th className="w-10 px-2 py-2">
                         <button
                           onClick={toggleAll}
                           className="text-on-surface-variant hover:text-gm-blue transition-colors"
@@ -318,10 +334,13 @@ export default function DatabaseExtractor() {
                           {allSelected ? <CheckSquare size={15} /> : <Square size={15} />}
                         </button>
                       </th>
-                      <th className="px-3 py-2 text-label-sm text-on-surface-variant/80">ID</th>
-                      <th className="px-3 py-2 text-label-sm text-on-surface-variant/80">Patient</th>
-                      <th className="px-3 py-2 text-label-sm text-on-surface-variant/80">Date</th>
-                      <th className="px-3 py-2 text-label-sm text-on-surface-variant/80">Author</th>
+                      <th className="w-28 px-3 py-2 text-label-sm text-on-surface-variant/80">ID</th>
+                      <th className="w-28 px-3 py-2 text-label-sm text-on-surface-variant/80">Patient</th>
+                      {filterOptions?.has_note_type && (
+                        <th className="w-40 px-3 py-2 text-label-sm text-on-surface-variant/80">Type</th>
+                      )}
+                      <th className="w-28 px-3 py-2 text-label-sm text-on-surface-variant/80">Date</th>
+                      <th className="w-52 px-3 py-2 text-label-sm text-on-surface-variant/80">Author</th>
                       <th className="px-3 py-2 text-label-sm text-on-surface-variant/80">Preview</th>
                     </tr>
                   </thead>
@@ -355,20 +374,27 @@ export default function DatabaseExtractor() {
                               {isSelected ? <CheckSquare size={15} /> : <Square size={15} />}
                             </button>
                           </td>
-                          <td className="px-3 py-2 mono whitespace-nowrap">{note.id}</td>
-                          <td className="px-3 py-2 mono whitespace-nowrap text-on-surface-variant">
+                          <td className="px-3 py-2 mono truncate">{note.id}</td>
+                          <td className="px-3 py-2 mono truncate text-on-surface-variant">
                             {note.patient_id || '—'}
                           </td>
-                          <td className="px-3 py-2 text-body-md tabular whitespace-nowrap">
+                          {filterOptions?.has_note_type && (
+                            <td className="px-3 py-2 truncate">
+                              {note.note_type ? (
+                                <span className="badge-neutral">{note.note_type}</span>
+                              ) : (
+                                <span className="text-on-surface-variant">—</span>
+                              )}
+                            </td>
+                          )}
+                          <td className="px-3 py-2 text-body-md tabular truncate">
                             {note.date || '—'}
                           </td>
-                          <td className="px-3 py-2 text-body-md whitespace-nowrap max-w-[14rem] truncate">
+                          <td className="px-3 py-2 text-body-md truncate" title={note.author ?? ''}>
                             {note.author || '—'}
                           </td>
-                          <td className="px-3 py-2 text-body-md text-on-surface-variant">
-                            <span className="block max-w-md truncate">
-                              {note.text_preview?.replace(/\s+/g, ' ') || '—'}
-                            </span>
+                          <td className="px-3 py-2 text-body-md text-on-surface-variant truncate">
+                            {note.text_preview?.replace(/\s+/g, ' ') || '—'}
                           </td>
                         </tr>
                       );
@@ -383,14 +409,14 @@ export default function DatabaseExtractor() {
                   </span>
                   <div className="flex gap-1.5">
                     <button
-                      onClick={() => loadNotes(page - 1, activeQuery)}
+                      onClick={() => loadNotes(page - 1, appliedFilters)}
                       disabled={page <= 1}
                       className="btn-outlined py-1.5 px-2.5"
                     >
                       <ChevronLeft size={14} /> Previous
                     </button>
                     <button
-                      onClick={() => loadNotes(page + 1, activeQuery)}
+                      onClick={() => loadNotes(page + 1, appliedFilters)}
                       disabled={page >= lastPage}
                       className="btn-outlined py-1.5 px-2.5"
                     >
@@ -428,6 +454,14 @@ export default function DatabaseExtractor() {
                           </dd>
                         </div>
                       ))}
+                      {previewNote.note_type && (
+                        <div className="col-span-2">
+                          <dt className="text-label-sm text-on-surface-variant/80">Type</dt>
+                          <dd>
+                            <span className="badge-neutral">{previewNote.note_type}</span>
+                          </dd>
+                        </div>
+                      )}
                       <div className="col-span-2">
                         <dt className="text-label-sm text-on-surface-variant/80">Author</dt>
                         <dd className="text-body-md text-on-surface">

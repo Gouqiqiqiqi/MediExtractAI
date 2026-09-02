@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +48,7 @@ def to_out(ds: DataSource) -> DataSourceOut:
             date=ds.col_date,
             author=ds.col_author,
             note_text=ds.col_note_text,
+            note_type=ds.col_note_type or "",
         ),
         is_default=ds.is_default,
         has_password=bool(ds.password_encrypted),
@@ -74,6 +76,7 @@ def to_config(ds: DataSource, settings: Settings) -> SourceConfig:
         col_date=ds.col_date,
         col_author=ds.col_author,
         col_note_text=ds.col_note_text,
+        col_note_type=ds.col_note_type or "",
     )
 
 
@@ -127,6 +130,7 @@ async def create_source(
         col_date=payload.columns.date,
         col_author=payload.columns.author,
         col_note_text=payload.columns.note_text,
+        col_note_type=payload.columns.note_type,
         created_by=created_by,
     )
     session.add(ds)
@@ -162,6 +166,7 @@ async def update_source(
         ds.col_date = mapping.date
         ds.col_author = mapping.author
         ds.col_note_text = mapping.note_text
+        ds.col_note_type = mapping.note_type
     data.pop("columns", None)
 
     for field, value in data.items():
@@ -225,9 +230,20 @@ async def ensure_bootstrap_source(
             url.password or "", settings.app_secret_key
         ),
         table_name="medical_notes",
+        # The seeded demo table carries the note's specialty; mapping it means
+        # the type filter is available out of the box.
+        col_note_type="specialty",
         is_default=True,
         created_by="system",
     )
     session.add(ds)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Every uvicorn worker runs startup, so two of them can both find the
+        # registry empty and both insert. The unique name constraint catches the
+        # loser, which is the right outcome — the source exists either way.
+        await session.rollback()
+        logger.debug("Default data source already created by another worker")
+        return
     logger.info("Bootstrapped default data source from NOTES_DATABASE_URL")

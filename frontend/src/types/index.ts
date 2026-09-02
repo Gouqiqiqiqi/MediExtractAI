@@ -31,6 +31,8 @@ export interface ColumnMapping {
   date: string;
   author: string;
   note_text: string;
+  /** Optional — the column holding the kind of note. Empty if the source has none. */
+  note_type: string;
 }
 
 export interface DataSource {
@@ -76,8 +78,25 @@ export interface NotePreview {
   patient_id: string | null;
   date: string | null;
   author: string | null;
+  note_type: string | null;
   text_preview: string;
   char_count: number;
+}
+
+/** Values present in a data source, for populating the filter menus. */
+export interface NoteFilterOptions {
+  note_types: string[];
+  authors: string[];
+  has_note_type: boolean;
+}
+
+/** What the note browser is currently narrowed to. */
+export interface NoteFilters {
+  search: string;
+  noteType: string;
+  author: string;
+  dateFrom: string;
+  dateTo: string;
 }
 
 export interface NoteListResponse {
