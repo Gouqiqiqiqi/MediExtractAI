@@ -22,6 +22,8 @@ def make_settings(**overrides) -> Settings:
         "gemini_api_key": "test-key",
         "gemini_model": "model-a",
         "ai_fallback_models": "model-b,model-c",
+        "groq_api_key": "",
+        "mistral_api_key": "",
     }
     base.update(overrides)
     return Settings(**base)
@@ -116,6 +118,43 @@ def test_unparseable_429_falls_back_to_a_plain_cooldown():
     assert cooldown == mr.DEFAULT_COOLDOWN_SECONDS
 
 
+def test_reset_durations_are_parsed_in_the_shapes_these_apis_use():
+    assert mr.parse_reset_duration("7.66s") == pytest.approx(7.66)
+    assert mr.parse_reset_duration("2m59.56s") == pytest.approx(179.56)
+    assert mr.parse_reset_duration("1h30m") == pytest.approx(5400)
+    assert mr.parse_reset_duration("60") == 60
+    assert mr.parse_reset_duration("soon") is None
+    assert mr.parse_reset_duration(None) is None
+
+
+def test_openai_compatible_429_prefers_retry_after():
+    cooldown, reason = mr.openai_compatible_rate_limit(
+        httpx.Headers({"retry-after": "12"}), default_seconds=60
+    )
+    assert reason == "per-minute rate limit"
+    assert cooldown == pytest.approx(12 + mr.RETRY_DELAY_BUFFER_SECONDS)
+
+
+def test_openai_compatible_daily_bucket_is_named_as_such():
+    """A reset hours away is a daily allowance, not a burst limit.
+
+    The distinction is what decides whether the request waits or gives up, so
+    it has to survive the trip from Groq's header to the rotation.
+    """
+    cooldown, reason = mr.openai_compatible_rate_limit(
+        httpx.Headers({"x-ratelimit-reset-requests": "3h12m10s"}), default_seconds=60
+    )
+    assert reason == "daily quota exhausted"
+    assert cooldown > 3600
+
+
+def test_openai_compatible_429_without_headers_uses_the_configured_default():
+    cooldown, reason = mr.openai_compatible_rate_limit(
+        httpx.Headers({}), default_seconds=45
+    )
+    assert (cooldown, reason) == (45, "rate limited")
+
+
 # ── The rotation ────────────────────────────────────────────────────────────
 
 def test_blocked_candidate_is_skipped_until_its_cooldown_expires():
@@ -169,8 +208,16 @@ def gemini_429(daily: bool) -> httpx.Response:
     )
 
 
-class FakeGemini:
-    """Stands in for the Gemini endpoint: named models fail, the rest answer.
+ANSWER = '[{"Diagnosis": "heart failure"}]'
+
+
+class FakeLLM:
+    """Stands in for every HTTP provider: named models fail, the rest answer.
+
+    One fake for both request shapes on purpose — Gemini names the model in the
+    URL and answers with ``candidates``, the OpenAI-compatible providers put it
+    in the body and answer with ``choices``, and the tests that matter here are
+    the ones that cross from one to the other.
 
     ``once`` makes a failure transient — the model fails its first call and
     answers afterwards, which is what a per-minute limit looks like.
@@ -181,22 +228,24 @@ class FakeGemini:
         self.once = once
         self.calls: list[str] = []
 
-    async def post(self, url, *, params=None, json=None):  # noqa: A002 — httpx's name
-        model = url.split("/models/")[1].split(":")[0]
+    async def post(self, url, *, params=None, headers=None, json=None):  # noqa: A002
+        gemini = "/models/" in url
+        model = url.split("/models/")[1].split(":")[0] if gemini else json["model"]
         self.calls.append(model)
+
         if model in self.failing:
             response = self.failing[model]
             if self.once:
                 del self.failing[model]
             return response
+
+        body = (
+            {"candidates": [{"content": {"parts": [{"text": ANSWER}]}}]}
+            if gemini
+            else {"choices": [{"message": {"content": ANSWER}}]}
+        )
         return httpx.Response(
-            200,
-            json={
-                "candidates": [
-                    {"content": {"parts": [{"text": '[{"Diagnosis": "heart failure"}]'}]}}
-                ]
-            },
-            request=httpx.Request("POST", "https://example.invalid"),
+            200, json=body, request=httpx.Request("POST", "https://example.invalid")
         )
 
     async def __aenter__(self):
@@ -208,12 +257,12 @@ class FakeGemini:
 
 @pytest.fixture
 def fake_gemini(monkeypatch):
-    """Point the extraction service at a fake Gemini and a fresh rotation."""
+    """Point the extraction service at a fake provider and a fresh rotation."""
 
     def install(
         failing: dict[str, httpx.Response], once: bool = False, **settings
-    ) -> FakeGemini:
-        fake = FakeGemini(failing, once=once)
+    ) -> FakeLLM:
+        fake = FakeLLM(failing, once=once)
         monkeypatch.setattr(
             "app.services.extraction_service.httpx.AsyncClient",
             lambda *a, **k: fake,
@@ -326,3 +375,67 @@ async def test_a_daily_quota_is_not_waited_out(fake_gemini, monkeypatch):
 
     with pytest.raises(RuntimeError, match="rate limited"):
         await ExtractionService.instance().extract(["note"], COLUMNS)
+
+
+# ── Across providers ────────────────────────────────────────────────────────
+
+def openai_429(headers: dict[str, str]) -> httpx.Response:
+    return httpx.Response(
+        429,
+        json={"error": {"message": "Rate limit reached for model"}},
+        headers=headers,
+        request=httpx.Request("POST", "https://example.invalid"),
+    )
+
+
+@pytest.mark.anyio
+async def test_gemini_falls_through_to_groq(fake_gemini):
+    """The reason for a second provider: a spent Google quota is not the end."""
+    fake = fake_gemini(
+        {"model-a": gemini_429(daily=True)},
+        ai_fallback_models="groq:openai/gpt-oss-120b",
+        groq_api_key="groq-key",
+    )
+
+    rows = await ExtractionService.instance().extract(["note"], COLUMNS)
+
+    assert rows == [{"Diagnosis": "heart failure"}]
+    assert fake.calls == ["model-a", "openai/gpt-oss-120b"]
+
+
+@pytest.mark.anyio
+async def test_rotation_crosses_providers_in_both_directions(fake_gemini):
+    fake = fake_gemini(
+        {
+            "model-a": gemini_429(daily=True),
+            "openai/gpt-oss-120b": openai_429({"x-ratelimit-reset-requests": "4h"}),
+        },
+        ai_fallback_models=(
+            "groq:openai/gpt-oss-120b,mistral:mistral-small-latest"
+        ),
+        groq_api_key="groq-key",
+        mistral_api_key="mistral-key",
+    )
+
+    rows = await ExtractionService.instance().extract(["one", "two"], COLUMNS)
+
+    assert len(rows) == 2
+    # Each dead model costs one request in total, not one per note.
+    assert fake.calls.count("model-a") == 1
+    assert fake.calls.count("openai/gpt-oss-120b") == 1
+    assert fake.calls.count("mistral-small-latest") == 2
+
+    status = {row["model"]: row for row in ExtractionService.instance().model_status()}
+    assert status["openai/gpt-oss-120b"]["reason"] == "daily quota exhausted"
+    assert status["mistral-small-latest"]["available"] is True
+
+
+@pytest.mark.anyio
+async def test_a_provider_without_a_key_never_enters_the_chain(fake_gemini):
+    """The shipped defaults name Groq and Mistral; an unset key must be inert."""
+    fake_gemini({}, ai_fallback_models="groq:openai/gpt-oss-120b")
+
+    chain = ExtractionService.instance().model_status()
+
+    assert [m["model"] for m in chain] == ["model-a"]
+    assert fake_gemini is not None

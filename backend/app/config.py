@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     demo_mode: bool = True
 
     # ── AI provider ──
-    ai_provider: Literal["gemini", "azure_openai"] = "gemini"
+    ai_provider: Literal["gemini", "azure_openai", "groq", "mistral"] = "gemini"
 
     # Google Gemini (free tier available — https://aistudio.google.com/apikey)
     gemini_api_key: str = ""
@@ -44,7 +44,12 @@ class Settings(BaseSettings):
     # Free-tier request quotas are counted per model and per day, so a second
     # model is a second quota — which is the whole point of the chain. Entries
     # whose provider has no credentials configured are dropped at startup.
-    ai_fallback_models: str = "gemini-3.1-flash-lite,gemini-2.5-flash"
+    ai_fallback_models: str = (
+        "groq:openai/gpt-oss-120b,"
+        "mistral:mistral-small-latest,"
+        "gemini-3.1-flash-lite,"
+        "gemini-2.5-flash"
+    )
 
     # How long a model is left alone after a 429 that carried no delay of its
     # own. Providers that do say (Google's RetryInfo, a Retry-After header) are
@@ -55,6 +60,16 @@ class Settings(BaseSettings):
     # first one to free up before failing the request. Longer than this and the
     # honest answer is a 503 — an HTTP request should not sit open for minutes.
     ai_max_wait_seconds: int = 30
+
+    # Groq and Mistral — both OpenAI-compatible, both free tiers without a card,
+    # and both say in their terms that API input is not used for training, which
+    # Google's free tier does not. Leaving a key blank drops that provider from
+    # the model chain at startup, so the defaults above are safe unset.
+    groq_api_key: str = ""
+    groq_model: str = "openai/gpt-oss-120b"
+
+    mistral_api_key: str = ""
+    mistral_model: str = "mistral-small-latest"
 
     # Azure OpenAI (optional alternative)
     azure_openai_endpoint: str = ""
@@ -110,14 +125,26 @@ class Settings(BaseSettings):
             "azure_openai": bool(
                 self.azure_openai_endpoint and self.azure_openai_api_key
             ),
+            "groq": bool(self.groq_api_key),
+            "mistral": bool(self.mistral_api_key),
         }
 
     @property
     def ai_primary_model(self) -> str:
         """The model name AI_PROVIDER's own setting points at."""
-        if self.ai_provider == "azure_openai":
-            return self.azure_openai_deployment
-        return self.gemini_model
+        return {
+            "gemini": self.gemini_model,
+            "azure_openai": self.azure_openai_deployment,
+            "groq": self.groq_model,
+            "mistral": self.mistral_model,
+        }.get(self.ai_provider, self.gemini_model)
+
+    def openai_compatible_key(self, provider: str) -> str:
+        """The API key for one of the OpenAI-compatible providers."""
+        return {
+            "groq": self.groq_api_key,
+            "mistral": self.mistral_api_key,
+        }.get(provider, "")
 
     @property
     def cors_origin_list(self) -> list[str]:

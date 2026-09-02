@@ -1,8 +1,14 @@
 """AI extraction service — converts free-text notes into structured rows.
 
-Supports two providers, selected via AI_PROVIDER:
+Providers, selected via AI_PROVIDER and used as fallbacks by name:
   - "gemini"        Google Gemini API (free tier available) — default
+  - "groq"          Groq (free tier, OpenAI-compatible)
+  - "mistral"       Mistral La Plateforme (free tier, OpenAI-compatible)
   - "azure_openai"  Azure OpenAI (optional)
+
+Everything but Gemini and Azure goes through one OpenAI-compatible adapter, so
+adding another provider of that kind is an endpoint URL and an API key rather
+than a new integration.
 
 AI_PROVIDER and its model are only the *first* choice. Extraction sends one
 request per note against quotas counted per model and per day, so a demo can
@@ -24,11 +30,13 @@ from app.config import Settings
 from app.models.schemas import ColumnDefinition
 from app.services.model_rotation import (
     CONFIG_ERROR_COOLDOWN_SECONDS,
+    OPENAI_COMPATIBLE_ENDPOINTS,
     TRANSIENT_COOLDOWN_SECONDS,
     ModelCandidate,
     ModelRotation,
     ProviderError,
     gemini_rate_limit,
+    openai_compatible_rate_limit,
     parse_chain,
     retry_after_seconds,
 )
@@ -305,6 +313,14 @@ class ExtractionService:
             return await self._call_gemini(
                 settings, candidate.model, system_prompt, user_prompt
             )
+        if candidate.provider in OPENAI_COMPATIBLE_ENDPOINTS:
+            return await self._call_openai_compatible(
+                settings,
+                candidate.provider,
+                candidate.model,
+                system_prompt,
+                user_prompt,
+            )
         return await self._call_azure_openai(
             settings, candidate.model, system_prompt, user_prompt
         )
@@ -406,6 +422,119 @@ class ExtractionService:
         )
         return ProviderError(
             f"Gemini {model} returned {resp.status_code}: {message}",
+            cooldown_seconds=CONFIG_ERROR_COOLDOWN_SECONDS,
+            reason=f"rejected ({resp.status_code})",
+        )
+
+    async def _call_openai_compatible(
+        self,
+        settings: Settings,
+        provider: str,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> str:
+        """Call any provider that speaks OpenAI's /chat/completions.
+
+        Written against httpx rather than the openai package on purpose: the
+        package is an optional dependency here, and this needs to work on a
+        deployment that never installs it.
+        """
+        api_key = settings.openai_compatible_key(provider)
+        if not api_key:
+            raise ProviderError(
+                f"{provider} is in the model chain but has no API key.",
+                cooldown_seconds=CONFIG_ERROR_COOLDOWN_SECONDS,
+                reason="not configured",
+            )
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.0,
+            "max_tokens": 4096,
+            # The system prompt says "JSON" in as many words, which is what
+            # json_object mode requires of the prompt on several of these APIs.
+            "response_format": {"type": "json_object"},
+        }
+        url = f"{OPENAI_COMPATIBLE_ENDPOINTS[provider]}/chat/completions"
+
+        try:
+            async with httpx.AsyncClient(timeout=90) as client:
+                resp = await client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json=payload,
+                )
+        except httpx.HTTPError as exc:
+            raise ProviderError(
+                f"Could not reach {provider}: {exc}",
+                cooldown_seconds=TRANSIENT_COOLDOWN_SECONDS,
+                reason="unreachable",
+            ) from exc
+
+        if resp.status_code != 200:
+            raise self._openai_compatible_error(settings, provider, model, resp)
+
+        data = resp.json()
+        try:
+            return data["choices"][0]["message"]["content"] or "[]"
+        except (KeyError, IndexError):
+            logger.error(
+                "Unexpected %s response shape: %.300s", provider, json.dumps(data)
+            )
+            return "[]"
+
+    def _openai_compatible_error(
+        self, settings: Settings, provider: str, model: str, resp: httpx.Response
+    ) -> ProviderError:
+        """Classify a non-200 from an OpenAI-compatible provider."""
+        message = ""
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        error = body.get("error") if isinstance(body, dict) else None
+        if isinstance(error, dict):
+            message = str(error.get("message", ""))[:200]
+        elif isinstance(error, str):
+            message = error[:200]
+        if not message:
+            message = resp.text[:200]
+
+        if resp.status_code == 429:
+            cooldown, reason = openai_compatible_rate_limit(
+                resp.headers, float(settings.ai_rate_limit_cooldown_seconds)
+            )
+            return ProviderError(
+                f"{provider} {model} rate limited: {message}",
+                cooldown_seconds=cooldown,
+                reason=reason,
+            )
+
+        if resp.status_code >= 500:
+            return ProviderError(
+                f"{provider} {model} returned {resp.status_code}: {message}",
+                cooldown_seconds=TRANSIENT_COOLDOWN_SECONDS,
+                reason=f"provider error {resp.status_code}",
+            )
+
+        # A decommissioned model name, a key without access, or a model that
+        # rejects json_object mode. Each needs a configuration change, so park
+        # the candidate and say which one it was.
+        logger.error(
+            "%s %s is misconfigured (HTTP %s): %s — removing it from the chain "
+            "for this process",
+            provider,
+            model,
+            resp.status_code,
+            message,
+        )
+        return ProviderError(
+            f"{provider} {model} returned {resp.status_code}: {message}",
             cooldown_seconds=CONFIG_ERROR_COOLDOWN_SECONDS,
             reason=f"rejected ({resp.status_code})",
         )

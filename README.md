@@ -120,7 +120,8 @@ Open port **80** in two places — they are independent and both are required:
 | `AI_PROVIDER` | `gemini` | `gemini` or `azure_openai` |
 | `GEMINI_API_KEY` | — | Free key from https://aistudio.google.com/apikey |
 | `GEMINI_MODEL` | `gemini-3.5-flash` | See the quota note below before changing |
-| `AI_FALLBACK_MODELS` | `gemini-3.1-flash-lite,gemini-2.5-flash` | Models to rotate to when the one above is rate limited, in order. `provider:model`, or a bare model name for `AI_PROVIDER`'s provider. |
+| `AI_FALLBACK_MODELS` | Groq, Mistral, then two more Gemini models | Models to rotate to when the one above is rate limited, in order. `provider:model`, or a bare model name for `AI_PROVIDER`'s provider. |
+| `GROQ_API_KEY` / `MISTRAL_API_KEY` | — | Free keys, no card. Blank means that provider is dropped from the chain at startup. |
 | `DATABASE_URL` | SQLite | The app's own database: audit log, jobs, data source registry |
 | `NOTES_DATABASE_URL` | falls back to `DATABASE_URL` | The clinical notes database. Registered as the default data source on first start. |
 | `DEMO_ALLOWED_DB_HOSTS` | `notes-db,localhost,127.0.0.1` | Hosts a demo deployment may connect a data source to. Ignored when `DEMO_MODE=false`. |
@@ -134,7 +135,18 @@ https://ai.dev/rate-limit.
 
 So the extractor holds a chain of models rather than one — `GEMINI_MODEL` followed by
 `AI_FALLBACK_MODELS` — and rotates down it. Because the quota is counted per model,
-the next model in the chain is a fresh quota.
+the next model in the chain is a fresh quota; and because the chain crosses providers,
+so is the next provider. The default chain is:
+
+```
+gemini-3.5-flash → groq:openai/gpt-oss-120b → mistral:mistral-small-latest
+                 → gemini-3.1-flash-lite → gemini-2.5-flash
+```
+
+Groq and Mistral speak the OpenAI chat-completions API, so they share one adapter —
+adding another provider of that kind is an endpoint URL and an API key, not an
+integration. A provider whose key is unset is dropped from the chain at startup, so
+the defaults are safe to ship unset.
 
 A 429 puts that model on a cooldown the rest of the batch sees, so hitting the limit
 costs one request rather than one per remaining note. How long the cooldown lasts comes

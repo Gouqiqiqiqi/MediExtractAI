@@ -49,7 +49,15 @@ RETRY_DELAY_BUFFER_SECONDS = 2.0
 QUOTA_RESET_TZ = "America/Los_Angeles"
 QUOTA_RESET_FALLBACK_SECONDS = 4 * 3600.0
 
-PROVIDERS = ("gemini", "azure_openai")
+# Providers that speak OpenAI's /chat/completions, which by now is most of
+# them. One adapter covers the lot, so adding another is this line plus an API
+# key setting — no new request-building or response-parsing code.
+OPENAI_COMPATIBLE_ENDPOINTS = {
+    "groq": "https://api.groq.com/openai/v1",
+    "mistral": "https://api.mistral.ai/v1",
+}
+
+PROVIDERS = ("gemini", "azure_openai", *OPENAI_COMPATIBLE_ENDPOINTS)
 
 
 @dataclass(frozen=True)
@@ -194,6 +202,57 @@ def gemini_rate_limit(payload: dict[str, Any]) -> tuple[float, str]:
     if retry_delay is not None:
         return retry_delay + RETRY_DELAY_BUFFER_SECONDS, "per-minute rate limit"
     return DEFAULT_COOLDOWN_SECONDS, "rate limited"
+
+
+def parse_reset_duration(value: Any) -> float | None:
+    """Parse the durations these APIs put in their rate-limit headers.
+
+    Groq answers in shapes like "2m59.56s" and "7.66s"; others send a plain
+    number of seconds. Anything else is not worth guessing at.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+
+    match = re.fullmatch(
+        r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?",
+        text,
+    )
+    if not match or not any(match.groups()):
+        return None
+    hours, minutes, seconds = (float(g) if g else 0.0 for g in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def openai_compatible_rate_limit(
+    headers: Any, default_seconds: float
+) -> tuple[float, str]:
+    """How long to hold back an OpenAI-compatible provider after a 429.
+
+    Retry-After is the standard answer; Groq also exposes when each bucket
+    refills, and its daily bucket is the one that matters here — a reset an
+    hour or more away is a daily allowance, not a burst limit, and calling it
+    what it is keeps the "wait it out or give up" decision honest.
+    """
+    delay = retry_after_seconds(headers)
+    if delay is None:
+        try:
+            delay = parse_reset_duration(headers.get("x-ratelimit-reset-requests"))
+        except AttributeError:
+            delay = None
+
+    if delay is None:
+        return default_seconds, "rate limited"
+    delay += RETRY_DELAY_BUFFER_SECONDS
+    if delay >= 3600:
+        return delay, "daily quota exhausted"
+    return delay, "per-minute rate limit"
 
 
 def retry_after_seconds(headers: Any) -> float | None:
