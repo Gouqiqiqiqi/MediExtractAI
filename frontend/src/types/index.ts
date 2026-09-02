@@ -123,6 +123,8 @@ export interface FileExtractionRequest {
 }
 
 export interface ExtractionResponse {
+  /** The run this result was recorded as — every extraction is persisted. */
+  run_id: string;
   /** Provenance columns first, then the user's requested schema. */
   columns: ColumnDefinition[];
   rows: Record<string, unknown>[];
@@ -136,6 +138,73 @@ export interface ExtractionResponse {
   provenance_columns?: string[];
 }
 
+// ── Runs: the review lifecycle ──
+
+/** Where a run sits between "the model answered" and "a clinician signed". */
+export type RunStatus = 'draft' | 'in_review' | 'approved' | 'rejected';
+
+export type RowStatus = 'pending' | 'approved' | 'rejected';
+
+export interface RunRow {
+  id: string;
+  row_index: number;
+  note_id: string;
+  patient_id: string;
+  data: Record<string, unknown>;
+  /** The model's untouched answer, kept so a correction can be seen and undone. */
+  ai_data: Record<string, unknown>;
+  corrected_columns: string[];
+  status: RowStatus;
+  review_note: string;
+  edited_by: string;
+  edited_at: string | null;
+  decided_by: string;
+  decided_at: string | null;
+}
+
+export interface RunSummary {
+  id: string;
+  created_at: string;
+  created_by: string;
+  /** "database" — rows point at notes we can read back. "upload" — a file. */
+  source_kind: 'database' | 'upload';
+  source_label: string;
+  note_count: number;
+  row_count: number;
+  status: RunStatus;
+  models_used: string;
+  approved_by: string;
+  approved_at: string | null;
+  pending_rows: number;
+  approved_rows: number;
+  rejected_rows: number;
+  corrected_rows: number;
+}
+
+export interface RunDetail extends RunSummary {
+  columns: ColumnDefinition[];
+  provenance_columns: string[];
+  rows: RunRow[];
+  sign_off_note: string;
+}
+
+export interface RunListResponse {
+  items: RunSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface RunStats {
+  total: number;
+  draft: number;
+  in_review: number;
+  approved: number;
+  rejected: number;
+  awaiting_review: number;
+  pending_rows: number;
+}
+
 // ── Upload ──
 
 export interface UploadResponse {
@@ -146,11 +215,8 @@ export interface UploadResponse {
 }
 
 // ── Export ──
-
-export interface ExportRequest {
-  columns: ColumnDefinition[];
-  rows: Record<string, unknown>[];
-}
+// No request type: a file is produced from a stored run, so what leaves is
+// what was reviewed rather than what the browser posted back.
 
 // ── Auth ──
 

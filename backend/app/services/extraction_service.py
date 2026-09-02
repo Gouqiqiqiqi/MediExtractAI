@@ -163,8 +163,13 @@ class ExtractionService:
         texts: list[str],
         columns: list[ColumnDefinition],
         provenance: list[dict[str, Any]] | None = None,
+        models_used: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Extract structured rows from one or more free-text notes.
+
+        ``models_used``, when given, is filled with the label of every model
+        that answered. The chain rotates on quota, so a run reviewed weeks
+        later cannot otherwise say what produced it.
 
         ``provenance``, when given, must be the same length as ``texts``. Its
         entry for a note is merged into every row that note produces, so the
@@ -196,7 +201,7 @@ class ExtractionService:
                 logger.info(
                     "Extracting note %d/%d (%d chars)", index + 1, total, len(text)
                 )
-                return await self._extract_single(text, columns, deadline)
+                return await self._extract_single(text, columns, deadline, models_used)
 
         # Concurrent, but the results come back in request order, so the caller's
         # note order — and therefore the provenance pairing below — is preserved.
@@ -219,6 +224,7 @@ class ExtractionService:
         text: str,
         columns: list[ColumnDefinition],
         deadline: float | None = None,
+        models_used: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         settings = self._settings
         if settings is None:
@@ -228,7 +234,9 @@ class ExtractionService:
             deadline = time.monotonic() + settings.ai_deadline_seconds
 
         system_prompt, user_prompt = _build_prompts(text, columns)
-        raw = await self._generate(settings, system_prompt, user_prompt, deadline)
+        raw = await self._generate(
+            settings, system_prompt, user_prompt, deadline, models_used
+        )
 
         try:
             parsed = json.loads(raw)
@@ -246,6 +254,7 @@ class ExtractionService:
         system_prompt: str,
         user_prompt: str,
         deadline: float,
+        models_used: set[str] | None = None,
     ) -> str:
         """Call the first usable model, moving down the chain as they fail.
 
@@ -330,6 +339,8 @@ class ExtractionService:
             if primary is not None and candidate.label != primary.label:
                 logger.info("Note served by fallback model %s", candidate.label)
             rotation.clear(candidate)
+            if models_used is not None:
+                models_used.add(candidate.label)
             return raw
 
     async def _call(

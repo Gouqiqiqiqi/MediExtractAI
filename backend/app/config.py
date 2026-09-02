@@ -95,8 +95,15 @@ class Settings(BaseSettings):
     azure_client_secret: str = ""
     azure_authority: str = ""
 
+    # ── Clinical governance ──
+    # When true, the person who ran an extraction may not sign it off — a
+    # second reviewer must. Off by default because the demo has one user and a
+    # rule nobody can satisfy teaches nothing; a real deployment turns it on.
+    require_separate_approver: bool = False
+
     # ── Database (application metadata) ──
-    # Audit log, extraction jobs, saved schemas. Defaults to a local SQLite file
+    # Audit log, extraction runs and their rows, saved schemas. Defaults to a
+    # local SQLite file
     # so the app runs with zero external services.
     database_url: str = "sqlite+aiosqlite:///./data/mediextract.db"
 

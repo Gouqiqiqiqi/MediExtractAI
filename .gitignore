@@ -12,6 +12,12 @@ dist/
 build/
 .eggs/
 
+# The application database. It now holds extracted rows — clinical content —
+# rather than only configuration, so a local run must not be committable.
+backend/data/
+*.sqlite
+*.sqlite3
+
 # Environment
 .env
 .env.local

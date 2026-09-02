@@ -1,5 +1,5 @@
 import { lazy } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Navigate, Routes, Route } from 'react-router-dom';
 
 import Layout from './components/Layout/Layout';
 import ProtectedRoute from './auth/ProtectedRoute';
@@ -16,7 +16,7 @@ import NotFound from './pages/NotFound';
 // screen while a page loads.
 const DatabaseExtractor = lazy(() => import('./pages/DatabaseExtractor'));
 const FileExtractor = lazy(() => import('./pages/FileExtractor'));
-const Results = lazy(() => import('./pages/Results'));
+const Review = lazy(() => import('./pages/Review'));
 const DataSources = lazy(() => import('./pages/DataSources'));
 
 export default function App() {
@@ -33,7 +33,10 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="database" element={<DatabaseExtractor />} />
           <Route path="upload" element={<FileExtractor />} />
-          <Route path="results" element={<Results />} />
+          <Route path="review" element={<Review />} />
+          {/* The page was called Results while it showed one table of rows.
+              It is a review queue now; the old path still resolves. */}
+          <Route path="results" element={<Navigate to="/review" replace />} />
           <Route path="data-sources" element={<DataSources />} />
         </Route>
         <Route path="*" element={<NotFound />} />

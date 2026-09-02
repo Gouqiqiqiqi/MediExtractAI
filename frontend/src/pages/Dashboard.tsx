@@ -12,15 +12,17 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowRight,
+  ClipboardCheck,
   Database,
   FileUp,
   Plug,
   Shield,
-  Table2,
 } from 'lucide-react';
 import { fetchDataSources } from '../api/dataSources';
 import { fetchNotes } from '../api/notes';
-import { loadResult, type SavedResult } from '../lib/resultStore';
+import { fetchRunStats, fetchRuns } from '../api/runs';
+import { relativeTime } from '../lib/time';
+import type { RunStats, RunSummary } from '../types';
 import { useRole } from '../auth/RoleContext';
 import type { DataSource } from '../types';
 import { SkeletonBlock } from '../components/common/Skeleton';
@@ -39,10 +41,16 @@ export default function Dashboard() {
   // this a failed request renders identically to a pending one, under a hint
   // claiming the number came from the default data source.
   const [noteCountFailed, setNoteCountFailed] = useState(false);
-  const [lastResult, setLastResult] = useState<SavedResult | null>(null);
+  const [stats, setStats] = useState<RunStats | null>(null);
+  const [latest, setLatest] = useState<RunSummary | null>(null);
 
   useEffect(() => {
-    setLastResult(loadResult());
+    fetchRunStats()
+      .then(setStats)
+      .catch(() => setStats(null));
+    fetchRuns({ pageSize: 1 })
+      .then(({ items }) => setLatest(items[0] ?? null))
+      .catch(() => setLatest(null));
 
     fetchDataSources()
       .then(setSources)
@@ -56,7 +64,7 @@ export default function Dashboard() {
     }
   }, [canExtract]);
 
-  const stats: Stat[] = [
+  const tiles: Stat[] = [
     {
       label: 'Data sources',
       value: sources === null ? '—' : String(sources.length),
@@ -80,10 +88,22 @@ export default function Dashboard() {
           : 'In the default data source',
     },
     {
+      // The number that says whether anyone is behind, which is the question a
+      // clinical service actually asks of a tool like this.
+      label: 'Awaiting review',
+      value: stats === null ? '—' : String(stats.awaiting_review),
+      hint:
+        stats === null
+          ? 'Could not reach the API'
+          : stats.awaiting_review > 0
+            ? `${stats.pending_rows} row${stats.pending_rows === 1 ? '' : 's'} undecided`
+            : `${stats.approved} run${stats.approved === 1 ? '' : 's'} signed off`,
+    },
+    {
       label: 'Last extraction',
-      value: lastResult ? `${lastResult.rows.length} rows` : 'None',
-      hint: lastResult
-        ? `${lastResult.columns.length} columns · this session`
+      value: latest ? `${latest.row_count} rows` : 'None',
+      hint: latest
+        ? `${relativeTime(latest.created_at)} · ${latest.source_label}`
         : 'Run one to see it here',
     },
     {
@@ -110,10 +130,11 @@ export default function Dashboard() {
       enabled: canExtract,
     },
     {
-      to: '/results',
-      icon: Table2,
-      title: 'Results',
-      description: 'Review, correct and export the most recent extraction.',
+      to: '/review',
+      icon: ClipboardCheck,
+      title: 'Review',
+      description:
+        'Correct what the model got wrong, sign a run off, and export it. Only signed-off rows leave as reviewed data.',
       enabled: true,
     },
     {
@@ -136,8 +157,8 @@ export default function Dashboard() {
       </div>
 
       {/* Live state */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-outline rounded-gm-lg overflow-hidden border border-outline">
-        {stats.map((s) => (
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-px bg-outline rounded-gm-lg overflow-hidden border border-outline">
+        {tiles.map((s) => (
           <div key={s.label} className="bg-surface px-4 py-3.5">
             <p className="text-label-sm text-on-surface-variant/80">{s.label}</p>
             <div className="text-headline-lg text-on-surface mt-1 tabular truncate">

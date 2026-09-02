@@ -165,6 +165,52 @@ case $? in
   *) no "live extraction failed" ;;
 esac
 
+# ── 5. The review gate ──
+# The extraction above was persisted as a draft run. That is the claim the whole
+# workflow rests on — nothing leaves as reviewed data until a clinician signs it
+# — so check it on the deployment rather than trusting the unit tests.
+echo
+echo "Review and sign-off"
+run_id=$(python3 -c '
+import json, sys
+try:
+    print(json.load(open("/tmp/preflight_extraction.json")).get("run_id", ""))
+except Exception:
+    print("")
+')
+
+if [ -n "$run_id" ]; then
+  status=$(curl -s --max-time 20 -H "$ROLE_HEADER" "$API/runs/$run_id" \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))' 2>/dev/null || echo "")
+  [ "$status" = "draft" ] \
+    && ok "the extraction was saved as a draft run" \
+    || no "run $run_id came back as '$status', expected draft"
+
+  # An unreviewed run must not export as approved data.
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H "$ROLE_HEADER" \
+    "$API/export/runs/$run_id/csv?scope=approved")
+  [ "$code" = "409" ] \
+    && ok "export of approved rows is refused while none are approved (409)" \
+    || no "approved-rows export returned HTTP $code, expected 409 — the review gate is open"
+
+  # A draft may still be exported, but only labelled as a draft.
+  name=$(curl -s -D - -o /dev/null --max-time 20 -H "$ROLE_HEADER" \
+    "$API/export/runs/$run_id/csv?scope=all" | grep -i 'content-disposition' || echo "")
+  case "$name" in
+    *DRAFT*) ok "draft export is labelled DRAFT" ;;
+    *) no "draft export was not labelled: $name" ;;
+  esac
+
+  # Leave nothing behind: a pre-flight run is not someone's work to review.
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X DELETE \
+    -H "$ROLE_HEADER" "$API/runs/$run_id")
+  [ "$code" = "204" ] \
+    && ok "pre-flight run discarded" \
+    || hm "could not discard the pre-flight run (HTTP $code) — it will sit in the review queue"
+else
+  no "the extraction response carried no run id — results are not being persisted"
+fi
+
 # ── Summary ──
 echo
 if [ "$fail" -eq 0 ] && [ "$warn" -eq 0 ]; then

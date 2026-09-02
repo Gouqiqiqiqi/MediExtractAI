@@ -9,12 +9,10 @@ export default defineConfig({
       output: {
         // Split the dependencies that never change away from the app code.
         // Asset filenames are content-hashed, so without this every deploy
-        // invalidates React and the table library along with the one component
-        // that actually changed, and every returning visitor re-downloads the
-        // lot.
+        // invalidates React along with the one component that actually
+        // changed, and every returning visitor re-downloads the lot.
         manualChunks: {
           react: ['react', 'react-dom', 'react-router-dom'],
-          table: ['@tanstack/react-table'],
         },
       },
     },
@@ -28,7 +26,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        // Overridable so the dev server can be pointed at a backend that is not
+        // on this host — a container on the same network, typically.
+        target: process.env.VITE_API_PROXY || 'http://localhost:8000',
         changeOrigin: true,
       },
     },

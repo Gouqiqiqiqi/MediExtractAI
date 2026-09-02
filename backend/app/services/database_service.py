@@ -207,6 +207,16 @@ class NotesRepository:
         self._engine = _get_engine(config.url)
 
     @property
+    def source(self) -> SourceConfig:
+        """Which configured source this reads.
+
+        Public because a run has to record *where* its notes came from, and
+        "the default data source" stops being an answer the moment a second
+        one is registered.
+        """
+        return self._cfg
+
+    @property
     def _c(self):
         return self._table.c
 

@@ -10,7 +10,13 @@ import { uploadFile } from '../../api/upload';
 import type { UploadResponse } from '../../types';
 
 interface Props {
-  onTextExtracted: (text: string, filename: string) => void;
+  /**
+   * Called with the combined text and the files it came from. The filenames
+   * arrive as a list rather than a joined string because callers count them —
+   * "3 files" is part of how a run is later identified in the history — and a
+   * filename may itself contain a comma.
+   */
+  onTextExtracted: (text: string, filenames: string[]) => void;
   /** When true, aggregates all uploaded file texts and calls onTextExtracted with combined text */
   multiple?: boolean;
 }
@@ -53,8 +59,7 @@ export default function FileUpload({ onTextExtracted, multiple = true }: Props) 
         const all = [...results, ...newResults];
         setResults(all);
         const combinedText = all.map((r) => r.extracted_text).join('\n\n---\n\n');
-        const filenames = all.map((r) => r.filename).join(', ');
-        onTextExtracted(combinedText, filenames);
+        onTextExtracted(combinedText, all.map((r) => r.filename));
         toast.success(`Extracted from ${newResults.length} file(s)`);
       }
 
@@ -75,17 +80,16 @@ export default function FileUpload({ onTextExtracted, multiple = true }: Props) 
     const updated = results.filter((_, i) => i !== index);
     setResults(updated);
     if (updated.length === 0) {
-      onTextExtracted('', '');
+      onTextExtracted('', []);
     } else {
       const combinedText = updated.map((r) => r.extracted_text).join('\n\n---\n\n');
-      const filenames = updated.map((r) => r.filename).join(', ');
-      onTextExtracted(combinedText, filenames);
+      onTextExtracted(combinedText, updated.map((r) => r.filename));
     }
   };
 
   const clearAll = () => {
     setResults([]);
-    onTextExtracted('', '');
+    onTextExtracted('', []);
   };
 
   return (
