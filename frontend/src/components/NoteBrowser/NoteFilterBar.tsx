@@ -7,6 +7,11 @@
  * and inpatient notes all sit together, "show me this month's respiratory
  * clinic letters" is the query, and a keyword only helps once you are already
  * close.
+ *
+ * Changes apply as they are made. An Apply button was worse than useless here:
+ * picking a clinician showed "Clear 1" immediately while the list underneath
+ * still held every note, so the filter read as broken rather than as pending.
+ * The parent debounces, so typing a keyword does not fire a request per key.
  */
 
 import { Filter, Search, X } from 'lucide-react';
@@ -16,6 +21,7 @@ interface Props {
   options: NoteFilterOptions | null;
   filters: NoteFilters;
   onChange: (filters: NoteFilters) => void;
+  /** Enter in the keyword box — applies without waiting for the debounce. */
   onApply: () => void;
   onReset: () => void;
   disabled?: boolean;
@@ -135,9 +141,6 @@ export default function NoteFilterBar({
         </div>
       </label>
 
-      <button type="submit" disabled={disabled} className="btn-filled">
-        Apply
-      </button>
       {active > 0 && (
         <button type="button" onClick={onReset} disabled={disabled} className="btn-text">
           <X size={14} />

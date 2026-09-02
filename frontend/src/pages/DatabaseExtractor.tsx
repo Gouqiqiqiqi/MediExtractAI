@@ -9,7 +9,7 @@
  * without scrolling.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
@@ -61,9 +61,10 @@ export default function DatabaseExtractor() {
     ...EMPTY_FILTERS,
     search: searchParams.get('q') ?? '',
   });
-  // The filters the currently displayed page was fetched with. Paging must
-  // reuse them: editing a filter without pressing Apply and then hitting Next
-  // would otherwise fetch page 2 of a different query.
+  // The filters the currently displayed page was fetched with. Paging reuses
+  // them rather than the live ones, so a filter edited while page 2 is on
+  // screen cannot page into a query the list has not been refetched for; it
+  // also tells the auto-apply effect below when it has nothing left to do.
   const [appliedFilters, setAppliedFilters] = useState<NoteFilters>(EMPTY_FILTERS);
   const [filterOptions, setFilterOptions] = useState<NoteFilterOptions | null>(null);
   const [loadingNotes, setLoadingNotes] = useState(false);
@@ -134,6 +135,29 @@ export default function DatabaseExtractor() {
     setSearchParams({}, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handedOverQuery, sourceId]);
+
+  // ── Filters apply themselves ──
+  // There used to be an Apply button, and it was the whole of the "filtering
+  // is broken" report: choosing a clinician lit up "Clear 1" while the list
+  // below still showed all 24 notes, so the filter looked ignored. Refetching
+  // on change removes the pending state that nothing on screen explained.
+  //
+  // Debounced because the keyword box changes on every keystroke. Keyed on the
+  // serialised filters so the effect re-runs on content, not identity, and
+  // stops as soon as what is displayed matches what is asked for — which is
+  // also what keeps it from re-fetching the page it just loaded.
+  const filtersKey = JSON.stringify(filters);
+  const appliedKey = JSON.stringify(appliedFilters);
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+
+  useEffect(() => {
+    if (!sourceId || handedOverQuery !== null) return;
+    if (filtersKey === appliedKey) return;
+    const timer = setTimeout(() => void loadNotes(1, filtersRef.current), 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtersKey, appliedKey, sourceId, handedOverQuery]);
 
   // A note ID from one system means nothing in another, so changing source
   // must not carry a stale selection across.
@@ -302,7 +326,7 @@ export default function DatabaseExtractor() {
               setFilters(EMPTY_FILTERS);
               void loadNotes(1, EMPTY_FILTERS);
             }}
-            disabled={sources.length === 0 || loadingNotes}
+            disabled={sources.length === 0}
           />
 
           {loadingNotes ? (
