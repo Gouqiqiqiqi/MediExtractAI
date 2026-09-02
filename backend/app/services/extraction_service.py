@@ -3,6 +3,12 @@
 Supports two providers, selected via AI_PROVIDER:
   - "gemini"        Google Gemini API (free tier available) — default
   - "azure_openai"  Azure OpenAI (optional)
+
+AI_PROVIDER and its model are only the *first* choice. Extraction sends one
+request per note against quotas counted per model and per day, so a demo can
+exhaust a free-tier model mid-batch. AI_FALLBACK_MODELS names what to use when
+that happens, and ``app.services.model_rotation`` decides when to move on and
+for how long to leave the exhausted model alone.
 """
 
 from __future__ import annotations
@@ -16,6 +22,16 @@ import httpx
 
 from app.config import Settings
 from app.models.schemas import ColumnDefinition
+from app.services.model_rotation import (
+    CONFIG_ERROR_COOLDOWN_SECONDS,
+    TRANSIENT_COOLDOWN_SECONDS,
+    ModelCandidate,
+    ModelRotation,
+    ProviderError,
+    gemini_rate_limit,
+    parse_chain,
+    retry_after_seconds,
+)
 
 logger = logging.getLogger("mediextract.services.extraction")
 
@@ -74,10 +90,11 @@ def _normalise(parsed: Any) -> list[dict[str, Any]]:
 
 
 class ExtractionService:
-    """Singleton service wrapping the configured AI provider."""
+    """Singleton service wrapping the configured chain of AI models."""
 
     _instance: ExtractionService | None = None
     _settings: Settings | None = None
+    _rotation: ModelRotation | None = None
     _azure_client: Any = None  # AsyncAzureOpenAI, imported lazily
 
     # ── Lifecycle ──
@@ -85,30 +102,28 @@ class ExtractionService:
     @classmethod
     def initialize(cls, settings: Settings) -> None:
         cls._settings = settings
+        cls._azure_client = None
 
-        if settings.ai_provider == "gemini":
-            if not settings.gemini_api_key:
-                logger.warning("GEMINI_API_KEY not set — extraction will be unavailable")
-            else:
-                logger.info(
-                    "ExtractionService initialised (provider=gemini, model=%s)",
-                    settings.gemini_model,
-                )
-        elif settings.ai_provider == "azure_openai":
-            if not settings.azure_openai_endpoint:
-                logger.warning("Azure OpenAI not configured — extraction will be unavailable")
-            else:
-                from openai import AsyncAzureOpenAI  # lazy import — optional dependency
+        configured = settings.ai_provider_configured
+        chain = parse_chain(
+            primary=ModelCandidate(settings.ai_provider, settings.ai_primary_model),
+            fallbacks=settings.ai_fallback_models,
+            default_provider=settings.ai_provider,
+            is_configured=lambda provider: configured.get(provider, False),
+        )
+        cls._rotation = ModelRotation(chain)
 
-                cls._azure_client = AsyncAzureOpenAI(
-                    azure_endpoint=settings.azure_openai_endpoint,
-                    api_key=settings.azure_openai_api_key,
-                    api_version=settings.azure_openai_api_version,
-                )
-                logger.info(
-                    "ExtractionService initialised (provider=azure_openai, deployment=%s)",
-                    settings.azure_openai_deployment,
-                )
+        if not chain:
+            logger.warning(
+                "No AI model is configured — extraction will be unavailable. "
+                "Set GEMINI_API_KEY, or AZURE_OPENAI_ENDPOINT and "
+                "AZURE_OPENAI_API_KEY."
+            )
+        else:
+            logger.info(
+                "ExtractionService initialised — model chain: %s",
+                " → ".join(c.label for c in chain),
+            )
 
         cls._instance = cls()
 
@@ -124,6 +139,13 @@ class ExtractionService:
         cls._azure_client = None
         cls._instance = None
         cls._settings = None
+        cls._rotation = None
+
+    # ── Status ──
+
+    def model_status(self) -> list[dict[str, Any]]:
+        """The chain and what each model is currently doing, for the API."""
+        return self._rotation.status() if self._rotation else []
 
     # ── Core extraction ──
 
@@ -184,11 +206,7 @@ class ExtractionService:
             raise RuntimeError("ExtractionService not initialised")
 
         system_prompt, user_prompt = _build_prompts(text, columns)
-
-        if settings.ai_provider == "gemini":
-            raw = await self._call_gemini(settings, system_prompt, user_prompt)
-        else:
-            raw = await self._call_azure_openai(settings, system_prompt, user_prompt)
+        raw = await self._generate(settings, system_prompt, user_prompt)
 
         try:
             parsed = json.loads(raw)
@@ -198,15 +216,114 @@ class ExtractionService:
 
         return _normalise(parsed)
 
-    # ── Providers ──
+    # ── Rotation ──
 
-    async def _call_gemini(
+    async def _generate(
         self, settings: Settings, system_prompt: str, user_prompt: str
     ) -> str:
-        if not settings.gemini_api_key:
-            raise RuntimeError("Gemini is not configured. Set GEMINI_API_KEY.")
+        """Call the first usable model, moving down the chain as they fail.
 
-        url = f"{GEMINI_BASE}/models/{settings.gemini_model}:generateContent"
+        The cooldown a failure sets is shared, so the other notes in the batch
+        skip the exhausted model instead of each discovering it for themselves.
+
+        A model that has just answered 429 will not answer differently two
+        seconds later, so a failed candidate is not tried again until either
+        another one has been tried or its cooldown has actually been waited
+        out — and each may be waited out once. Both sets shrink the options
+        monotonically, which is what makes this loop terminate.
+        """
+        rotation = self._rotation
+        if rotation is None or not rotation.candidates:
+            raise RuntimeError(
+                "No AI model is configured. Set GEMINI_API_KEY (or the "
+                "AZURE_OPENAI_* settings) and restart."
+            )
+
+        tried: set[str] = set()
+        waited: set[str] = set()
+        while True:
+            candidate = rotation.next_available(tried)
+
+            if candidate is None:
+                # Nothing is usable right now. Waiting beats failing only when
+                # the wait is short — a per-minute limit on a single-model
+                # deployment is seconds, but a spent daily quota is hours and
+                # the caller deserves to be told rather than left hanging.
+                candidate, wait = rotation.soonest(waited)
+                if candidate is None:
+                    raise RuntimeError(
+                        "Every AI model in the chain failed for this note: "
+                        f"{rotation.describe_waits()}"
+                    )
+                if wait > settings.ai_max_wait_seconds:
+                    raise RuntimeError(
+                        "All AI models are rate limited — "
+                        f"{rotation.describe_waits()}. Add another model to "
+                        "AI_FALLBACK_MODELS, or try again later."
+                    )
+                logger.info(
+                    "Waiting %.1fs for %s to come off cooldown", wait, candidate.label
+                )
+                await asyncio.sleep(wait)
+                # The cooldown has been served, so drop it rather than leaving
+                # the candidate to be filtered out by a clock that a fraction
+                # of a second of drift can still put on the wrong side.
+                rotation.clear(candidate)
+                waited.add(candidate.label)
+                tried.discard(candidate.label)
+                continue
+
+            try:
+                raw = await self._call(candidate, settings, system_prompt, user_prompt)
+            except ProviderError as exc:
+                tried.add(candidate.label)
+                rotation.block(candidate, exc.cooldown_seconds, exc.reason)
+                logger.warning(
+                    "%s unavailable (%s) — holding it for %.0fs and trying the "
+                    "next model. %s",
+                    candidate.label,
+                    exc.reason,
+                    exc.cooldown_seconds,
+                    exc,
+                )
+                continue
+
+            primary = rotation.primary
+            if primary is not None and candidate.label != primary.label:
+                logger.info("Note served by fallback model %s", candidate.label)
+            rotation.clear(candidate)
+            return raw
+
+    async def _call(
+        self,
+        candidate: ModelCandidate,
+        settings: Settings,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> str:
+        if candidate.provider == "gemini":
+            return await self._call_gemini(
+                settings, candidate.model, system_prompt, user_prompt
+            )
+        return await self._call_azure_openai(
+            settings, candidate.model, system_prompt, user_prompt
+        )
+
+    # ── Providers ──
+    # Both translate their own failures into ProviderError so that the rotation
+    # above does not have to know one provider's error shapes from another's.
+
+    async def _call_gemini(
+        self, settings: Settings, model: str, system_prompt: str, user_prompt: str
+    ) -> str:
+        if not settings.gemini_api_key:
+            raise ProviderError(
+                "Gemini is not configured. Set GEMINI_API_KEY.",
+                cooldown_seconds=CONFIG_ERROR_COOLDOWN_SECONDS,
+                reason="not configured",
+            )
+
+        url = f"{GEMINI_BASE}/models/{model}:generateContent"
         payload = {
             "system_instruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -216,39 +333,172 @@ class ExtractionService:
                 "responseMimeType": "application/json",
             },
         }
-        async with httpx.AsyncClient(timeout=90) as client:
-            resp = await client.post(
-                url,
-                params={"key": settings.gemini_api_key},
-                json=payload,
-            )
+        try:
+            async with httpx.AsyncClient(timeout=90) as client:
+                resp = await client.post(
+                    url,
+                    params={"key": settings.gemini_api_key},
+                    json=payload,
+                )
+        except httpx.HTTPError as exc:
+            raise ProviderError(
+                f"Could not reach Gemini: {exc}",
+                cooldown_seconds=TRANSIENT_COOLDOWN_SECONDS,
+                reason="unreachable",
+            ) from exc
+
         if resp.status_code != 200:
-            logger.error("Gemini API error %s: %.300s", resp.status_code, resp.text)
-            raise RuntimeError(f"Gemini API returned {resp.status_code}")
+            raise self._gemini_error(settings, model, resp)
 
         data = resp.json()
         try:
             return data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError):
+            # A response that parsed but holds no candidate is usually a safety
+            # block on this note. Another model would very likely do the same,
+            # so this is not a reason to rotate.
             logger.error("Unexpected Gemini response shape: %.300s", json.dumps(data))
             return "[]"
 
-    async def _call_azure_openai(
-        self, settings: Settings, system_prompt: str, user_prompt: str
-    ) -> str:
-        if self._azure_client is None:
-            raise RuntimeError(
-                "Azure OpenAI is not configured. "
-                "Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY."
+    def _gemini_error(
+        self, settings: Settings, model: str, resp: httpx.Response
+    ) -> ProviderError:
+        """Classify a non-200 from Gemini into a cooldown."""
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = {}
+
+        message = ""
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = str(error.get("message", ""))[:200]
+
+        if resp.status_code == 429:
+            cooldown, reason = gemini_rate_limit(payload)
+            # The configured default wins over our generic one; a deployment
+            # that knows its own limits should be able to say so.
+            if reason == "rate limited":
+                cooldown = float(settings.ai_rate_limit_cooldown_seconds)
+            return ProviderError(
+                f"Gemini {model} rate limited: {message}",
+                cooldown_seconds=cooldown,
+                reason=reason,
             )
-        response = await self._azure_client.chat.completions.create(
-            model=settings.azure_openai_deployment,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.0,
-            max_tokens=4096,
-            response_format={"type": "json_object"},
+
+        if resp.status_code >= 500:
+            return ProviderError(
+                f"Gemini {model} returned {resp.status_code}: {message}",
+                cooldown_seconds=TRANSIENT_COOLDOWN_SECONDS,
+                reason=f"provider error {resp.status_code}",
+            )
+
+        # 400/401/403/404 — a retired model name, a key without access to it, a
+        # malformed request. None of these fix themselves in a minute, and a
+        # retired model is exactly how a working demo goes quiet, so say so
+        # loudly and take the model out of the chain for the session.
+        logger.error(
+            "Gemini %s is misconfigured (HTTP %s): %s — removing it from the "
+            "chain for this process",
+            model,
+            resp.status_code,
+            message,
         )
+        return ProviderError(
+            f"Gemini {model} returned {resp.status_code}: {message}",
+            cooldown_seconds=CONFIG_ERROR_COOLDOWN_SECONDS,
+            reason=f"rejected ({resp.status_code})",
+        )
+
+    def _get_azure_client(self, settings: Settings) -> Any:
+        """Create the Azure client on first use.
+
+        Lazy because ``openai`` is an optional dependency: a Gemini-only
+        deployment does not install it, and a chain that merely *mentions* a
+        fallback should not make the import mandatory.
+        """
+        if self._azure_client is not None:
+            return self._azure_client
+        if not (settings.azure_openai_endpoint and settings.azure_openai_api_key):
+            raise ProviderError(
+                "Azure OpenAI is not configured. "
+                "Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY.",
+                cooldown_seconds=CONFIG_ERROR_COOLDOWN_SECONDS,
+                reason="not configured",
+            )
+        try:
+            from openai import AsyncAzureOpenAI
+        except ImportError as exc:
+            raise ProviderError(
+                "Azure OpenAI is in the model chain but the openai package is "
+                "not installed (uncomment it in requirements.txt).",
+                cooldown_seconds=CONFIG_ERROR_COOLDOWN_SECONDS,
+                reason="openai package missing",
+            ) from exc
+
+        ExtractionService._azure_client = AsyncAzureOpenAI(
+            azure_endpoint=settings.azure_openai_endpoint,
+            api_key=settings.azure_openai_api_key,
+            api_version=settings.azure_openai_api_version,
+        )
+        return ExtractionService._azure_client
+
+    async def _call_azure_openai(
+        self, settings: Settings, deployment: str, system_prompt: str, user_prompt: str
+    ) -> str:
+        client = self._get_azure_client(settings)
+        try:
+            response = await client.chat.completions.create(
+                model=deployment,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.0,
+                max_tokens=4096,
+                response_format={"type": "json_object"},
+            )
+        except Exception as exc:  # noqa: BLE001 — classified below, then re-raised
+            raise self._azure_error(settings, deployment, exc) from exc
         return response.choices[0].message.content or "[]"
+
+    def _azure_error(
+        self, settings: Settings, deployment: str, exc: Exception
+    ) -> ProviderError:
+        """Classify an openai SDK exception without importing the SDK.
+
+        Duck-typed on purpose: the package is optional, so this code has to be
+        importable — and testable — on a deployment that never installs it.
+        """
+        status_code = getattr(exc, "status_code", None)
+        headers = getattr(getattr(exc, "response", None), "headers", None)
+
+        if status_code == 429:
+            cooldown = retry_after_seconds(headers)
+            return ProviderError(
+                f"Azure OpenAI {deployment} rate limited: {exc}",
+                cooldown_seconds=(
+                    cooldown
+                    if cooldown is not None
+                    else float(settings.ai_rate_limit_cooldown_seconds)
+                ),
+                reason="rate limited",
+            )
+        if status_code is not None and status_code >= 500:
+            return ProviderError(
+                f"Azure OpenAI {deployment} returned {status_code}: {exc}",
+                cooldown_seconds=TRANSIENT_COOLDOWN_SECONDS,
+                reason=f"provider error {status_code}",
+            )
+        if status_code is not None:
+            return ProviderError(
+                f"Azure OpenAI {deployment} returned {status_code}: {exc}",
+                cooldown_seconds=CONFIG_ERROR_COOLDOWN_SECONDS,
+                reason=f"rejected ({status_code})",
+            )
+        # A timeout or a dropped connection carries no status code.
+        return ProviderError(
+            f"Azure OpenAI {deployment} call failed: {exc}",
+            cooldown_seconds=TRANSIENT_COOLDOWN_SECONDS,
+            reason="unreachable",
+        )

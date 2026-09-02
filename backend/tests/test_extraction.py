@@ -34,3 +34,18 @@ async def test_extract_from_text_valid_payload(client: AsyncClient):
     resp = await client.post("/api/v1/extraction/from-text", json=payload)
     # 200 if an AI provider is configured, 503 if not
     assert resp.status_code in (200, 503)
+
+
+@pytest.mark.anyio
+async def test_model_chain_is_reportable(client: AsyncClient):
+    """The chain has to be inspectable — a silent fallback is unexplainable."""
+    resp = await client.get("/api/v1/extraction/models")
+    assert resp.status_code == 200
+    for model in resp.json():
+        assert {"provider", "model", "is_primary", "available"} <= set(model)
+
+
+@pytest.mark.anyio
+async def test_model_chain_requires_auth(anon_client: AsyncClient):
+    resp = await anon_client.get("/api/v1/extraction/models")
+    assert resp.status_code == 401

@@ -120,17 +120,36 @@ Open port **80** in two places — they are independent and both are required:
 | `AI_PROVIDER` | `gemini` | `gemini` or `azure_openai` |
 | `GEMINI_API_KEY` | — | Free key from https://aistudio.google.com/apikey |
 | `GEMINI_MODEL` | `gemini-3.5-flash` | See the quota note below before changing |
+| `AI_FALLBACK_MODELS` | `gemini-3.1-flash-lite,gemini-2.5-flash` | Models to rotate to when the one above is rate limited, in order. `provider:model`, or a bare model name for `AI_PROVIDER`'s provider. |
 | `DATABASE_URL` | SQLite | The app's own database: audit log, jobs, data source registry |
 | `NOTES_DATABASE_URL` | falls back to `DATABASE_URL` | The clinical notes database. Registered as the default data source on first start. |
 | `DEMO_ALLOWED_DB_HOSTS` | `notes-db,localhost,127.0.0.1` | Hosts a demo deployment may connect a data source to. Ignored when `DEMO_MODE=false`. |
 
-### A note on Gemini free-tier quota
+### Free-tier quota, and what happens when it runs out
 
 One API request is made per note, so extracting 20 notes costs 20 requests. Free-tier
 quotas are **per model and per day**, and they vary sharply: `gemini-2.5-flash` allows
-20 requests a day, which a single demo session exhausts. `gemini-3.5-flash` is the
-default here; `gemini-3.1-flash-lite` is a tested fallback. Check your key at
+20 requests a day, which a single demo session exhausts. Check your key at
 https://ai.dev/rate-limit.
+
+So the extractor holds a chain of models rather than one — `GEMINI_MODEL` followed by
+`AI_FALLBACK_MODELS` — and rotates down it. Because the quota is counted per model,
+the next model in the chain is a fresh quota.
+
+A 429 puts that model on a cooldown the rest of the batch sees, so hitting the limit
+costs one request rather than one per remaining note. How long the cooldown lasts comes
+from the provider's own answer: Google's error says whether the quota that was hit is
+per-minute or per-day, and only the second means "not today". A per-minute limit with
+nowhere to rotate to is waited out; a spent daily quota is not, and returns a 503 saying
+which models are exhausted rather than holding the request open for hours. A model that
+answers 404 — a retired model name, the other way a demo goes quiet — is dropped from
+the chain for the life of the process, with the reason in the log.
+
+```bash
+curl -s localhost:8000/api/v1/extraction/models -H 'X-Demo-Role: Admin' | python3 -m json.tool
+```
+
+shows the chain in order and, for anything on cooldown, why and for how long.
 
 ## Security posture
 

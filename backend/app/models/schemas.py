@@ -213,6 +213,27 @@ class ExtractionResponse(BaseModel):
     provenance_columns: list[str] = Field(default_factory=list)
 
 
+class ModelStatus(BaseModel):
+    """One model in the extraction chain, and whether it can be used now.
+
+    Free-tier quotas are spent per model per day, so "which model is actually
+    answering right now" is operational information — without it, a fallback
+    silently taking over looks identical to nothing having happened.
+    """
+
+    provider: str
+    model: str
+    is_primary: bool
+    available: bool
+    # Seconds until it can be tried again; null when it is available.
+    available_in_seconds: float | None = None
+    # Why it is being held back: "daily quota exhausted", "per-minute rate
+    # limit", "rejected (404)" — the distinction that decides whether to wait
+    # a minute or to change the configuration.
+    reason: str | None = None
+    blocked_since: str | None = None
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Upload
 # ═══════════════════════════════════════════════════════════════════════════════

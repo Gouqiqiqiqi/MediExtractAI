@@ -39,6 +39,23 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash"
 
+    # Models to fall back to, in order, when the one above is rate limited.
+    # "provider:model", or a bare model name meaning AI_PROVIDER's provider.
+    # Free-tier request quotas are counted per model and per day, so a second
+    # model is a second quota — which is the whole point of the chain. Entries
+    # whose provider has no credentials configured are dropped at startup.
+    ai_fallback_models: str = "gemini-3.1-flash-lite,gemini-2.5-flash"
+
+    # How long a model is left alone after a 429 that carried no delay of its
+    # own. Providers that do say (Google's RetryInfo, a Retry-After header) are
+    # believed instead, and an exhausted per-day quota is held until it resets.
+    ai_rate_limit_cooldown_seconds: int = 60
+
+    # When every model in the chain is cooling down, wait this long for the
+    # first one to free up before failing the request. Longer than this and the
+    # honest answer is a 503 — an HTTP request should not sit open for minutes.
+    ai_max_wait_seconds: int = 30
+
     # Azure OpenAI (optional alternative)
     azure_openai_endpoint: str = ""
     azure_openai_api_key: str = ""
@@ -84,6 +101,23 @@ class Settings(BaseSettings):
             for h in self.demo_allowed_db_hosts.split(",")
             if h.strip()
         ]
+
+    @property
+    def ai_provider_configured(self) -> dict[str, bool]:
+        """Which providers have enough configuration to be called at all."""
+        return {
+            "gemini": bool(self.gemini_api_key),
+            "azure_openai": bool(
+                self.azure_openai_endpoint and self.azure_openai_api_key
+            ),
+        }
+
+    @property
+    def ai_primary_model(self) -> str:
+        """The model name AI_PROVIDER's own setting points at."""
+        if self.ai_provider == "azure_openai":
+            return self.azure_openai_deployment
+        return self.gemini_model
 
     @property
     def cors_origin_list(self) -> list[str]:

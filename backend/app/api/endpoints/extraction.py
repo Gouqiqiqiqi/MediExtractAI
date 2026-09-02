@@ -14,6 +14,7 @@ from app.models.schemas import (
     ExtractionRequest,
     ExtractionResponse,
     FileExtractionRequest,
+    ModelStatus,
     UserClaims,
 )
 from app.services.extraction_service import ExtractionService
@@ -56,6 +57,19 @@ def _provenance_column(name: str, description: str) -> ColumnDefinition:
         description=description,
         required=False,
     )
+
+
+@router.get("/models", response_model=list[ModelStatus])
+async def model_chain(
+    user: UserClaims = Depends(require_role(Role.ADMIN, Role.CLINICIAN)),
+):
+    """The AI models extraction will try, in order, and which are usable now.
+
+    When a free-tier model hits its daily quota the extractor moves to the next
+    one on its own; this is how anyone can see that it happened, and when the
+    exhausted model is expected back.
+    """
+    return ExtractionService.instance().model_status()
 
 
 @router.post("/from-database", response_model=ExtractionResponse)
