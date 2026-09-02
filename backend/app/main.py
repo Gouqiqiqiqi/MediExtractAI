@@ -21,6 +21,15 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging(settings.log_level)
     settings.ensure_data_dir()
 
+    # The application's own database — audit log, jobs, saved schemas and the
+    # registry of customer databases we know how to read.
+    from app.services import app_database, data_source_service, database_service
+
+    app_database.init_engine(settings)
+    await app_database.create_tables()
+    async with app_database.session_factory()() as session:
+        await data_source_service.ensure_bootstrap_source(session, settings)
+
     # Pre-warm Azure OpenAI client, DB pool, etc.
     from app.services.extraction_service import ExtractionService
     ExtractionService.initialize(settings)
@@ -29,6 +38,8 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Cleanup
     ExtractionService.shutdown()
+    await database_service.dispose_engines()
+    await app_database.dispose()
 
 
 def create_app() -> FastAPI:

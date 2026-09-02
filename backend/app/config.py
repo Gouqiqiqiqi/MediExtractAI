@@ -62,13 +62,28 @@ class Settings(BaseSettings):
     # credentials to it. Keeping it separate from database_url means the app's
     # own metadata never has to live inside the customer's estate.
     # Falls back to database_url when unset (single-database dev setups).
+    # On first start this is registered as the default data source; after that
+    # data sources are managed through the API and this is only a bootstrap.
     notes_database_url: str = ""
+
+    # Hosts a demo deployment may connect a data source to. Demo mode has no
+    # authentication, so an unrestricted connection form would turn a public
+    # page into an SSRF primitive. Ignored entirely when demo_mode is False.
+    demo_allowed_db_hosts: str = "notes-db,localhost,127.0.0.1"
 
     # ── Derived ──
     @property
     def notes_db_url(self) -> str:
-        """Connection string for the source notes database."""
+        """Bootstrap connection string for the source notes database."""
         return self.notes_database_url or self.database_url
+
+    @property
+    def demo_allowed_db_host_list(self) -> list[str]:
+        return [
+            h.strip().lower()
+            for h in self.demo_allowed_db_hosts.split(",")
+            if h.strip()
+        ]
 
     @property
     def cors_origin_list(self) -> list[str]:

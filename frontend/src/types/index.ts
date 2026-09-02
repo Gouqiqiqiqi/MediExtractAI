@@ -20,6 +20,55 @@ export interface ColumnDefinition {
   required: boolean;
 }
 
+// ── Data sources ──
+
+export type DbEngine = 'postgresql' | 'mssql' | 'sqlite';
+
+/** Which column in the customer's table means what to us. */
+export interface ColumnMapping {
+  id: string;
+  patient_id: string;
+  date: string;
+  author: string;
+  note_text: string;
+}
+
+export interface DataSource {
+  id: string;
+  name: string;
+  description: string;
+  engine: DbEngine;
+  host: string;
+  port: number | null;
+  database_name: string;
+  username: string;
+  table_name: string;
+  columns: ColumnMapping;
+  is_default: boolean;
+  /** Whether a password is stored. The password itself is never returned. */
+  has_password: boolean;
+}
+
+export interface DataSourceCreate {
+  name: string;
+  description?: string;
+  engine: DbEngine;
+  host: string;
+  port?: number | null;
+  database_name: string;
+  username: string;
+  password: string;
+  table_name: string;
+  columns: ColumnMapping;
+}
+
+export interface DataSourceTestResult {
+  ok: boolean;
+  message: string;
+  note_count: number | null;
+  sample: NotePreview[];
+}
+
 // ── Notes ──
 
 export interface NotePreview {
@@ -41,6 +90,8 @@ export interface NoteListResponse {
 // ── Extraction ──
 
 export interface ExtractionRequest {
+  /** Omit to use the default data source. */
+  source_id?: string;
   note_ids: string[];
   columns: ColumnDefinition[];
 }

@@ -3,11 +3,12 @@
  * Features: data preview panel, multi-select with bulk actions, Google Material styling.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Play, Search, Eye, EyeOff, CheckSquare, Square, X, ChevronLeft, ChevronRight } from 'lucide-react';
-import type { ColumnDefinition, ExtractionResponse, NotePreview } from '../types';
+import type { ColumnDefinition, DataSource, ExtractionResponse, NotePreview } from '../types';
 import { fetchNotes } from '../api/notes';
+import { fetchDataSources } from '../api/dataSources';
 import { extractFromDatabase } from '../api/extraction';
 import SchemaBuilder from '../components/SchemaBuilder/SchemaBuilder';
 import DataTable from '../components/DataTable/DataTable';
@@ -17,6 +18,10 @@ import Loading from '../components/common/Loading';
 export default function DatabaseExtractor() {
   // Schema
   const [columns, setColumns] = useState<ColumnDefinition[]>([]);
+
+  // Data source
+  const [sources, setSources] = useState<DataSource[]>([]);
+  const [sourceId, setSourceId] = useState<string>('');
 
   // Notes browser
   const [notes, setNotes] = useState<NotePreview[]>([]);
@@ -34,11 +39,25 @@ export default function DatabaseExtractor() {
   const [result, setResult] = useState<ExtractionResponse | null>(null);
   const [extracting, setExtracting] = useState(false);
 
+  const selectedSource = sources.find((s) => s.id === sourceId);
+
+  // ── Load the data sources this deployment can read ──
+  useEffect(() => {
+    fetchDataSources()
+      .then((list) => {
+        setSources(list);
+        // Default to whichever the administrator marked as default.
+        const preferred = list.find((s) => s.is_default) ?? list[0];
+        if (preferred) setSourceId(preferred.id);
+      })
+      .catch(() => toast.error('Could not load data sources'));
+  }, []);
+
   // ── Load notes ──
   const loadNotes = async (p = 1) => {
     setLoadingNotes(true);
     try {
-      const data = await fetchNotes(p, 20, searchTerm || undefined);
+      const data = await fetchNotes(p, 20, searchTerm || undefined, sourceId || undefined);
       setNotes(data.items);
       setTotalNotes(data.total);
       setPage(p);
@@ -47,6 +66,15 @@ export default function DatabaseExtractor() {
     } finally {
       setLoadingNotes(false);
     }
+  };
+
+  // A note ID from one system means nothing in another, so changing source
+  // must not carry a stale selection across.
+  const changeSource = (id: string) => {
+    setSourceId(id);
+    setSelectedIds(new Set());
+    setNotes([]);
+    setPreviewNote(null);
   };
 
   // ── Toggle single selection ──
@@ -86,6 +114,7 @@ export default function DatabaseExtractor() {
     setExtracting(true);
     try {
       const res = await extractFromDatabase({
+        source_id: sourceId || undefined,
         note_ids: Array.from(selectedIds),
         columns,
       });
@@ -121,6 +150,39 @@ export default function DatabaseExtractor() {
               {showPreview ? <EyeOff size={16} /> : <Eye size={16} />}
               {showPreview ? 'Hide Preview' : 'Show Preview'}
             </button>
+          )}
+        </div>
+
+        {/* Data source */}
+        <div className="mb-4">
+          <label className="block text-label-md text-on-surface-variant mb-1">
+            Data source
+          </label>
+          {sources.length === 0 ? (
+            <p className="text-body-md text-on-surface-variant">
+              No data source configured yet — an administrator adds one under Data Sources.
+            </p>
+          ) : (
+            <>
+              <select
+                value={sourceId}
+                onChange={(e) => changeSource(e.target.value)}
+                className="w-full px-3 py-2 bg-surface-container rounded-gm-lg text-body-md
+                           text-on-surface border-0 focus:outline-none focus:ring-2 focus:ring-gm-blue/40"
+              >
+                {sources.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                    {s.is_default ? ' (default)' : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="text-label-md text-on-surface-variant mt-1">
+                Reading <span className="font-mono">{selectedSource?.table_name}</span> — notes
+                come from the column mapped as{' '}
+                <span className="font-mono">{selectedSource?.columns.note_text}</span>.
+              </p>
+            </>
           )}
         </div>
 

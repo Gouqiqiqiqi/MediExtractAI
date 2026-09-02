@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Any
 
 import httpx
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
@@ -93,23 +93,44 @@ async def validate_token(
     return payload
 
 
+# Demo-only header letting a visitor view the app as a different role, so the
+# difference between what an administrator and a clinician can do is something
+# you can see rather than something the README claims. Read *only* when
+# demo_mode is on; it has no effect on the authenticated path below.
+DEMO_ROLE_HEADER = "X-Demo-Role"
+
+_DEMO_PROFILES: dict[Role, tuple[str, str, str]] = {
+    Role.ADMIN: ("demo-admin-001", "Dr Demo Admin", "admin@example.nhs.uk"),
+    Role.CLINICIAN: ("demo-clinician-001", "Dr Demo Clinician", "clinician@example.nhs.uk"),
+    Role.READONLY: ("demo-readonly-001", "Demo Auditor", "audit@example.nhs.uk"),
+}
+
+
+def _demo_user(requested: str | None) -> UserClaims:
+    """Build the demo user, honouring a requested role when it is a real one."""
+    role = Role.ADMIN
+    if requested:
+        try:
+            role = Role(requested)
+        except ValueError:
+            logger.debug("Ignoring unknown demo role %r", requested)
+    sub, name, email = _DEMO_PROFILES[role]
+    return UserClaims(sub=sub, name=name, email=email, roles=[role])
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
     settings: Settings = Depends(get_settings),
+    demo_role: str | None = Header(default=None, alias=DEMO_ROLE_HEADER),
 ) -> UserClaims:
     """Extract and validate the current user from the Authorization header.
 
     In demo mode (DEMO_MODE=true) authentication is disabled entirely and a
-    demo user with full permissions is returned. Demo deployments must only
-    ever contain synthetic data.
+    demo user is returned, whose role the caller may choose. Demo deployments
+    must only ever contain synthetic data.
     """
     if settings.demo_mode:
-        return UserClaims(
-            sub="demo-user-001",
-            name="Demo User",
-            email="demo@example.com",
-            roles=[Role.ADMIN],
-        )
+        return _demo_user(demo_role)
 
     if credentials is None:
         raise HTTPException(

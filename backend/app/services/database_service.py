@@ -1,25 +1,36 @@
-"""Database service — read-only access to the source medical notes database.
+"""Read-only access to a customer's clinical notes database.
+
+Nothing about the customer's schema is hard-coded. A DataSource supplies the
+connection *and* the mapping — which table holds the notes, and which of its
+columns mean id, patient, date, author and note text. Two customers never name
+these the same way, and needing a code change per site is the difference
+between shipping a product and shipping a bespoke integration each time.
 
 Dialect portability
 -------------------
-The notes database belongs to the customer, so we cannot assume which engine it
-runs on: a hospital SQL Server, a warehouse Postgres, a SQLite extract handed
-over for a pilot. Every query here is therefore built with SQLAlchemy Core
-rather than raw SQL, so the same code compiles to whatever dialect the
-connection string points at.
-
+Queries are built with SQLAlchemy Core, never raw SQL, so the same code
+compiles for Postgres, SQL Server or a SQLite extract handed over for a pilot.
 Two rules keep it that way:
-  * Pagination goes through ``.limit()/.offset()`` — SQLAlchemy emits
-    ``LIMIT/OFFSET`` or ``OFFSET ... ROWS FETCH NEXT ... ROWS ONLY`` as required.
-  * String truncation and length are done in Python, not in SQL. ``LEFT()`` and
-    ``LEN()`` are T-SQL only; ``SUBSTR()``/``LENGTH()`` are not universal
-    either. A page is 20 rows, so pulling the full text and slicing it here
-    costs nothing and removes a whole class of dialect bugs.
+
+  * Pagination goes through ``.limit()/.offset()``.
+  * String truncation and length are done in Python. ``LEFT()``/``LEN()`` are
+    T-SQL; ``SUBSTR()``/``LENGTH()`` are not universal either. A page is 20
+    rows, so slicing here costs nothing and removes a class of dialect bugs.
+
+Safety
+------
+Identifiers come from operator input, so they are validated against
+``IDENTIFIER_RE`` at the schema layer before they ever reach a Table
+definition, and SQLAlchemy quotes them on the way out. In demo mode the set of
+hosts that may be connected to is restricted — a publicly reachable demo with
+authentication disabled must not double as an open database proxy.
 """
 
 from __future__ import annotations
 
 import logging
+import urllib.parse
+from dataclasses import dataclass
 from typing import NamedTuple
 
 from sqlalchemy import (
@@ -32,7 +43,7 @@ from sqlalchemy import (
     func,
     select,
 )
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.config import Settings
 from app.models.schemas import NotePreview
@@ -41,23 +52,6 @@ logger = logging.getLogger("mediextract.services.database")
 
 # Length of the preview snippet shown in the notes browser.
 PREVIEW_CHARS = 500
-
-# ── Source table ────────────────────────────────────────────────────────────
-# Reflects the customer's existing table; we never create or write to it.
-# Point this at whatever the customer actually calls it — the column names are
-# the only thing the rest of the app depends on.
-metadata = MetaData()
-
-medical_notes = Table(
-    "medical_notes",
-    metadata,
-    Column("id", String(64), primary_key=True),
-    Column("patient_id", String(64)),
-    Column("note_date", Date),
-    Column("author", String(255)),
-    Column("specialty", String(128)),
-    Column("note_text", Text),
-)
 
 
 class NoteSource(NamedTuple):
@@ -68,75 +62,168 @@ class NoteSource(NamedTuple):
     note_text: str
 
 
-# Module-level session factory (initialised lazily)
-async_session_factory: async_sessionmaker[AsyncSession] | None = None
+class DataSourceError(RuntimeError):
+    """Configuration or connectivity problem with a data source."""
 
 
-def _normalise_async_url(url: str) -> str:
-    """Upgrade a sync driver URL to its async counterpart.
+@dataclass(frozen=True)
+class SourceConfig:
+    """Everything needed to read notes from one customer database."""
 
-    Lets an operator paste the connection string their DBA gave them without
-    having to know which async driver we use.
+    id: str
+    name: str
+    url: str
+    table_name: str
+    col_id: str
+    col_patient_id: str
+    col_date: str
+    col_author: str
+    col_note_text: str
+
+    @property
+    def table_key(self) -> tuple:
+        return (
+            self.url,
+            self.table_name,
+            self.col_id,
+            self.col_patient_id,
+            self.col_date,
+            self.col_author,
+            self.col_note_text,
+        )
+
+
+# ── Connection strings ──────────────────────────────────────────────────────
+
+def build_url(
+    engine: str,
+    host: str,
+    port: int | None,
+    database: str,
+    username: str,
+    password: str,
+) -> str:
+    """Assemble an async SQLAlchemy URL. Credentials are percent-encoded."""
+    if engine == "sqlite":
+        # `database` is a filesystem path for SQLite.
+        return f"sqlite+aiosqlite:///{database}"
+
+    user = urllib.parse.quote_plus(username or "")
+    pwd = urllib.parse.quote_plus(password or "")
+    credentials = f"{user}:{pwd}@" if user else ""
+    netloc = f"{host}:{port}" if port else host
+
+    if engine == "postgresql":
+        return f"postgresql+asyncpg://{credentials}{netloc}/{database}"
+    if engine == "mssql":
+        return (
+            f"mssql+aioodbc://{credentials}{netloc}/{database}"
+            "?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
+        )
+    raise DataSourceError(f"Unsupported database engine: {engine!r}")
+
+
+def check_host_allowed(host: str, settings: Settings) -> None:
+    """Reject hosts that a demo deployment must not reach.
+
+    With DEMO_MODE on there is no authentication, so an unrestricted connection
+    form would let any visitor point the server at any host it can route to —
+    an SSRF primitive and a credential-harvesting page in one. The allowlist is
+    the price of showing the real flow on a public demo.
     """
-    prefixes = {
-        "mssql+pyodbc://": "mssql+aioodbc://",
-        "postgresql://": "postgresql+asyncpg://",
-        "postgres://": "postgresql+asyncpg://",
-        "postgresql+psycopg2://": "postgresql+asyncpg://",
-        "sqlite://": "sqlite+aiosqlite://",
-    }
-    for sync_prefix, async_prefix in prefixes.items():
-        if url.startswith(sync_prefix):
-            return url.replace(sync_prefix, async_prefix, 1)
-    return url
+    if not settings.demo_mode:
+        return
+    allowed = settings.demo_allowed_db_host_list
+    if host and host.lower() not in allowed:
+        raise DataSourceError(
+            f"Demo mode only permits connections to: {', '.join(allowed)}. "
+            f"Host {host!r} was refused. A real deployment has authentication "
+            "and no such restriction."
+        )
 
 
-def _init_engine(database_url: str) -> async_sessionmaker[AsyncSession]:
-    """Create an async engine + session factory from the connection string."""
-    global async_session_factory
-
-    url = _normalise_async_url(database_url)
-
-    # SQLite ignores pool sizing; passing it anyway raises on some driver
-    # versions, so only send pool options to real server engines.
-    kwargs: dict = {"pool_pre_ping": True, "echo": False}
-    if not url.startswith("sqlite"):
-        kwargs |= {"pool_size": 5, "max_overflow": 10}
-
-    engine = create_async_engine(url, **kwargs)
-    async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    logger.info("Notes database engine initialised (dialect=%s)", engine.dialect.name)
-    return async_session_factory
+# ── Engine / table caches ───────────────────────────────────────────────────
+# Engines are pooled per connection string; tables per mapping. Both are cheap
+# to hold and expensive to rebuild on every request.
+_engines: dict[str, AsyncEngine] = {}
+_tables: dict[tuple, Table] = {}
 
 
-def _to_preview(row) -> NotePreview:  # noqa: ANN001 — SQLAlchemy Row
-    """Build a NotePreview, truncating the note text in Python."""
-    full_text = row.note_text or ""
-    return NotePreview(
-        id=str(row.id),
-        patient_id=str(row.patient_id or ""),
-        date=str(row.note_date or ""),
-        author=str(row.author or ""),
-        text_preview=full_text[:PREVIEW_CHARS],
-        char_count=len(full_text),
-    )
+def _get_engine(url: str) -> AsyncEngine:
+    engine = _engines.get(url)
+    if engine is None:
+        kwargs: dict = {"echo": False}
+        if not url.startswith("sqlite"):
+            kwargs |= {"pool_pre_ping": True, "pool_size": 5, "max_overflow": 10}
+        engine = create_async_engine(url, **kwargs)
+        _engines[url] = engine
+        logger.info("Opened engine for %s", url.split("@")[-1])
+    return engine
 
 
-class DatabaseService:
-    """Read-only access to the medical notes SQL database."""
+def _get_table(cfg: SourceConfig) -> Table:
+    table = _tables.get(cfg.table_key)
+    if table is None:
+        schema = None
+        name = cfg.table_name
+        if "." in name:  # e.g. dbo.ClinicalDocument
+            schema, name = name.split(".", 1)
+        table = Table(
+            name,
+            MetaData(schema=schema),
+            Column(cfg.col_id, String(255), primary_key=True),
+            Column(cfg.col_patient_id, String(255)),
+            Column(cfg.col_date, Date),
+            Column(cfg.col_author, String(255)),
+            Column(cfg.col_note_text, Text),
+        )
+        _tables[cfg.table_key] = table
+    return table
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-        global async_session_factory
-        if async_session_factory is None and settings.notes_db_url:
-            _init_engine(settings.notes_db_url)
 
-    async def _session(self) -> AsyncSession:
-        if async_session_factory is None:
-            raise RuntimeError(
-                "Notes database not configured — set NOTES_DATABASE_URL"
-            )
-        return async_session_factory()
+async def dispose_engines() -> None:
+    for engine in _engines.values():
+        await engine.dispose()
+    _engines.clear()
+    _tables.clear()
+
+
+# ── Repository ──────────────────────────────────────────────────────────────
+
+class NotesRepository:
+    """Read-only queries against one configured notes database."""
+
+    def __init__(self, config: SourceConfig) -> None:
+        self._cfg = config
+        self._table = _get_table(config)
+        self._engine = _get_engine(config.url)
+
+    @property
+    def _c(self):
+        return self._table.c
+
+    def _preview(self, row) -> NotePreview:  # noqa: ANN001 — SQLAlchemy Row
+        cfg = self._cfg
+        full_text = getattr(row, cfg.col_note_text, "") or ""
+        return NotePreview(
+            id=str(getattr(row, cfg.col_id, "")),
+            patient_id=str(getattr(row, cfg.col_patient_id, "") or ""),
+            date=str(getattr(row, cfg.col_date, "") or ""),
+            author=str(getattr(row, cfg.col_author, "") or ""),
+            text_preview=full_text[:PREVIEW_CHARS],
+            char_count=len(full_text),
+        )
+
+    def _preview_select(self):
+        c = self._c
+        cfg = self._cfg
+        return select(
+            c[cfg.col_id],
+            c[cfg.col_patient_id],
+            c[cfg.col_date],
+            c[cfg.col_author],
+            c[cfg.col_note_text],
+        )
 
     async def list_notes(
         self,
@@ -144,84 +231,65 @@ class DatabaseService:
         page_size: int = 20,
         search: str | None = None,
     ) -> tuple[list[NotePreview], int]:
-        """Return paginated note previews from the source database."""
-        async with await self._session() as session:
-            count_stmt = select(func.count()).select_from(medical_notes)
-            page_stmt = select(
-                medical_notes.c.id,
-                medical_notes.c.patient_id,
-                medical_notes.c.note_date,
-                medical_notes.c.author,
-                medical_notes.c.note_text,
-            )
+        """Return paginated note previews."""
+        cfg = self._cfg
+        count_stmt = select(func.count()).select_from(self._table)
+        page_stmt = self._preview_select()
 
-            if search:
-                # ilike compiles to LOWER(x) LIKE LOWER(y) on engines without a
-                # native case-insensitive operator, so it works everywhere.
-                pattern = f"%{search}%"
-                condition = medical_notes.c.note_text.ilike(pattern)
-                count_stmt = count_stmt.where(condition)
-                page_stmt = page_stmt.where(condition)
+        if search:
+            # ilike compiles to LOWER(x) LIKE LOWER(y) where there is no native
+            # case-insensitive operator, so it behaves the same everywhere.
+            condition = self._c[cfg.col_note_text].ilike(f"%{search}%")
+            count_stmt = count_stmt.where(condition)
+            page_stmt = page_stmt.where(condition)
 
-            total = (await session.execute(count_stmt)).scalar_one()
+        page_stmt = (
+            page_stmt.order_by(self._c[cfg.col_date].desc())
+            .limit(page_size)
+            .offset((page - 1) * page_size)
+        )
 
-            page_stmt = (
-                page_stmt.order_by(medical_notes.c.note_date.desc())
-                .limit(page_size)
-                .offset((page - 1) * page_size)
-            )
-            rows = (await session.execute(page_stmt)).all()
+        async with self._engine.connect() as conn:
+            total = (await conn.execute(count_stmt)).scalar_one()
+            rows = (await conn.execute(page_stmt)).all()
 
-        return [_to_preview(r) for r in rows], total
+        return [self._preview(r) for r in rows], total
 
-    async def get_note(self, note_id: str) -> NotePreview:
-        """Retrieve a single note by ID."""
-        async with await self._session() as session:
-            stmt = select(
-                medical_notes.c.id,
-                medical_notes.c.patient_id,
-                medical_notes.c.note_date,
-                medical_notes.c.author,
-                medical_notes.c.note_text,
-            ).where(medical_notes.c.id == note_id)
-            row = (await session.execute(stmt)).first()
-
-        if row is None:
-            from fastapi import HTTPException, status
-
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Note not found")
-
-        return _to_preview(row)
+    async def get_note(self, note_id: str) -> NotePreview | None:
+        stmt = self._preview_select().where(self._c[self._cfg.col_id] == note_id)
+        async with self._engine.connect() as conn:
+            row = (await conn.execute(stmt)).first()
+        return self._preview(row) if row is not None else None
 
     async def get_notes_for_extraction(
         self, note_ids: list[str]
     ) -> list[NoteSource]:
-        """Fetch full note text plus the identifiers needed to trace it back.
+        """Fetch note text plus the identifiers needed to trace it back.
 
-        Returns records in the same order as ``note_ids``. ``IN`` clauses give
-        no ordering guarantee, so the caller must never assume the database
-        returns rows in the order it asked for them — the rows are re-ordered
-        here against the requested list.
+        Returns records in the order requested. ``IN`` gives no ordering
+        guarantee, so the rows are re-ordered here against the requested list
+        rather than trusting whatever the database returns.
 
-        IDs that do not exist are skipped rather than raising: a note may have
-        been deleted between the browser listing it and the user extracting it.
+        Unknown IDs are skipped with a warning rather than raising: a note can
+        be deleted between the browser listing it and the user extracting it.
         """
         if not note_ids:
             return []
 
-        async with await self._session() as session:
-            stmt = select(
-                medical_notes.c.id,
-                medical_notes.c.patient_id,
-                medical_notes.c.note_text,
-            ).where(medical_notes.c.id.in_(note_ids))
-            rows = (await session.execute(stmt)).all()
+        cfg = self._cfg
+        c = self._c
+        stmt = select(
+            c[cfg.col_id], c[cfg.col_patient_id], c[cfg.col_note_text]
+        ).where(c[cfg.col_id].in_(note_ids))
+
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(stmt)).all()
 
         by_id = {
-            str(r.id): NoteSource(
-                note_id=str(r.id),
-                patient_id=str(r.patient_id or ""),
-                note_text=str(r.note_text or ""),
+            str(getattr(r, cfg.col_id)): NoteSource(
+                note_id=str(getattr(r, cfg.col_id)),
+                patient_id=str(getattr(r, cfg.col_patient_id, "") or ""),
+                note_text=str(getattr(r, cfg.col_note_text, "") or ""),
             )
             for r in rows
         }
@@ -229,9 +297,24 @@ class DatabaseService:
         missing = [nid for nid in note_ids if nid not in by_id]
         if missing:
             logger.warning(
-                "%d requested note(s) not found in source database: %s",
+                "%d requested note(s) not found in %s: %s",
                 len(missing),
+                cfg.name,
                 ", ".join(missing[:5]),
             )
 
         return [by_id[nid] for nid in note_ids if nid in by_id]
+
+    async def test(self, sample_size: int = 3) -> tuple[int, list[NotePreview]]:
+        """Count rows and read a few, to prove the mapping is right.
+
+        Counting alone would pass against a table whose columns we have
+        misnamed; returning rows lets whoever is configuring it *see* that the
+        column they picked as "note text" really holds notes.
+        """
+        count_stmt = select(func.count()).select_from(self._table)
+        sample_stmt = self._preview_select().limit(sample_size)
+        async with self._engine.connect() as conn:
+            total = (await conn.execute(count_stmt)).scalar_one()
+            rows = (await conn.execute(sample_stmt)).all()
+        return total, [self._preview(r) for r in rows]

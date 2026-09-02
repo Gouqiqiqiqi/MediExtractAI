@@ -6,8 +6,8 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.config import Settings, get_settings
 from app.core.security import Role, require_role
+from app.dependencies import DbSession, SettingsDep, build_repository
 from app.models.schemas import (
     ColumnDataType,
     ColumnDefinition,
@@ -16,7 +16,6 @@ from app.models.schemas import (
     FileExtractionRequest,
     UserClaims,
 )
-from app.services.database_service import DatabaseService
 from app.services.extraction_service import ExtractionService
 
 router = APIRouter()
@@ -62,8 +61,9 @@ def _provenance_column(name: str, description: str) -> ColumnDefinition:
 @router.post("/from-database", response_model=ExtractionResponse)
 async def extract_from_database(
     body: ExtractionRequest,
+    session: DbSession,
+    settings: SettingsDep,
     user: UserClaims = Depends(require_role(Role.ADMIN, Role.CLINICIAN)),
-    settings: Settings = Depends(get_settings),
 ):
     """Extract structured data from medical notes stored in the SQL database.
 
@@ -78,8 +78,8 @@ async def extract_from_database(
         len(body.columns),
     )
 
-    db = DatabaseService(settings)
-    notes = await db.get_notes_for_extraction(body.note_ids)
+    repo = await build_repository(session, settings, body.source_id)
+    notes = await repo.get_notes_for_extraction(body.note_ids)
 
     if not notes:
         raise HTTPException(

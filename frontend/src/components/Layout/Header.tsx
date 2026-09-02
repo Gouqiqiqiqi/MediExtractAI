@@ -1,6 +1,16 @@
 import { Bell, Search, User } from 'lucide-react';
+import { useRole } from '../../auth/RoleContext';
+import RoleSwitcher from './RoleSwitcher';
+
+const DISPLAY_NAME: Record<string, string> = {
+  Admin: 'Dr Demo Admin',
+  Clinician: 'Dr Demo Clinician',
+  ReadOnly: 'Demo Auditor',
+};
 
 export default function Header() {
+  const { role } = useRole();
+
   return (
     <header className="h-16 bg-surface border-b border-outline/40 flex items-center justify-between px-6">
       {/* Search bar */}
@@ -15,7 +25,9 @@ export default function Header() {
         />
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
+        <RoleSwitcher />
+
         {/* Notification */}
         <button className="w-10 h-10 rounded-gm-xl flex items-center justify-center
                            text-on-surface-variant hover:bg-surface-container transition-colors duration-200">
@@ -27,9 +39,12 @@ export default function Header() {
           <div className="w-9 h-9 rounded-gm-xl bg-gm-blue-light flex items-center justify-center">
             <User size={18} className="text-gm-blue" />
           </div>
-          <span className="text-label-lg text-on-surface font-medium">
-            Demo User
-          </span>
+          <div className="flex flex-col leading-tight">
+            <span className="text-label-lg text-on-surface font-medium">
+              {DISPLAY_NAME[role] ?? 'Demo User'}
+            </span>
+            <span className="text-label-md text-on-surface-variant">{role}</span>
+          </div>
         </div>
       </div>
     </header>
