@@ -43,6 +43,19 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await app_database.dispose()
 
 
+# FastAPI serves Swagger UI and ReDoc from jsdelivr, and the favicon from its
+# own site. Named here so the exception is visible rather than buried in a
+# header string.
+DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
+DOCS_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; "
+    "worker-src 'self' blob:"
+)
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
 
@@ -75,7 +88,14 @@ def create_app() -> FastAPI:
         response.headers["Strict-Transport-Security"] = (
             "max-age=63072000; includeSubDomains; preload"
         )
-        response.headers["Content-Security-Policy"] = "default-src 'self'"
+        # The API returns JSON and files, never markup, so the strictest policy
+        # is the right one — the SPA's own policy is set by nginx, which serves
+        # it. The exception is the interactive docs: FastAPI renders those from
+        # a CDN, so a blanket 'self' left the page the README tells people to
+        # open in development silently blank.
+        response.headers["Content-Security-Policy"] = (
+            DOCS_CSP if request.url.path.startswith(DOCS_PATHS) else "default-src 'none'"
+        )
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=()"
