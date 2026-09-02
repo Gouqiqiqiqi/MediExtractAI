@@ -7,6 +7,7 @@ Supports two providers, selected via AI_PROVIDER:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -17,6 +18,11 @@ from app.config import Settings
 from app.models.schemas import ColumnDefinition
 
 logger = logging.getLogger("mediextract.services.extraction")
+
+# Notes are extracted concurrently, but not without a ceiling: provider rate
+# limits are per-minute as well as per-day, and firing fifty requests at once is
+# the fastest way to turn a working batch into a wall of 429s.
+MAX_CONCURRENT_EXTRACTIONS = 4
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -142,10 +148,24 @@ class ExtractionService:
                 f"provenance has {len(provenance)} entries for {len(texts)} texts"
             )
 
+        total = len(texts)
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_EXTRACTIONS)
+
+        async def extract_one(index: int, text: str) -> list[dict[str, Any]]:
+            async with semaphore:
+                logger.info(
+                    "Extracting note %d/%d (%d chars)", index + 1, total, len(text)
+                )
+                return await self._extract_single(text, columns)
+
+        # Concurrent, but the results come back in request order, so the caller's
+        # note order — and therefore the provenance pairing below — is preserved.
+        per_note = await asyncio.gather(
+            *(extract_one(i, text) for i, text in enumerate(texts))
+        )
+
         all_rows: list[dict[str, Any]] = []
-        for i, text in enumerate(texts):
-            logger.info("Extracting note %d/%d (%d chars)", i + 1, len(texts), len(text))
-            rows = await self._extract_single(text, columns)
+        for i, rows in enumerate(per_note):
             if provenance is not None:
                 source = provenance[i]
                 # Provenance first so a hallucinated key of the same name in the

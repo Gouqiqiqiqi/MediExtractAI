@@ -37,7 +37,7 @@ class Settings(BaseSettings):
 
     # Google Gemini (free tier available — https://aistudio.google.com/apikey)
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.5-flash"
 
     # Azure OpenAI (optional alternative)
     azure_openai_endpoint: str = ""
