@@ -2,42 +2,75 @@
 
 **Turn free-text clinical notes into structured, analysis-ready tables — with AI.**
 
-A full-stack web application that lets a user upload medical documents (`.txt`, `.docx`, `.pdf`) or point at a notes database, define an output schema on the fly, and use an LLM to extract structured rows they can review, correct, and export (CSV / Excel / FHIR JSON).
+🔗 **Live demo: [http://140.238.101.112](http://140.238.101.112)** — open, no sign-in, synthetic data only.
+
+A full-stack web application that connects to an existing clinical notes database (or takes uploaded `.txt` / `.docx` / `.pdf` documents), lets a user define an output schema on the fly, and uses an LLM to extract structured rows they can review, correct, and export as CSV, Excel or FHIR JSON.
 
 Built by a healthcare data engineer to explore how LLMs can accelerate one of the most manual jobs in clinical data work: turning unstructured narrative notes into usable datasets.
 
 > **Note on data:** this project is developed and demonstrated with **synthetic clinical notes only**. It has never processed real patient data. The architecture (OIDC auth, RBAC, audit logging, private networking) is designed so it *could* run in a governed healthcare environment, but the public demo runs in open demo mode.
 
+## Try the demo
+
+The demo carries two data sources with deliberately different schemas, so the same UI reads both without a code change:
+
+| Data source | Table | note id | patient | note text |
+|---|---|---|---|---|
+| Demo clinical notes | `medical_notes` | `id` | `patient_id` | `note_text` |
+| Clinic Letters (legacy) | `clinical_documents` | `doc_id` | `mrn` | `doc_body` |
+
+Use **View as** in the header to switch between Admin, Clinician and ReadOnly. The roles are enforced by the API, not hidden in the UI — a Clinician really does get a 403 from the data source endpoints.
+
+The synthetic notes are written to contain what makes clinical extraction hard: negation, ex-smoker versus current smoker, family history that belongs to someone else, and UK dosing abbreviations (`BD`, `OD`, `TDS`, `PRN`).
+
 ## Features
 
-- **File Upload** — parse `.txt`, `.doc/.docx`, `.pdf` into plain text
-- **Database Reader** — connect to an existing notes database and extract in bulk
-- **Dynamic Schema Builder** — define output columns and data types in the UI
-- **AI-Powered Extraction** — Google Gemini (free tier) or Azure OpenAI, selected by config
-- **Editable Results Table** — review, correct, and approve extracted rows
-- **Export** — CSV, Excel, or FHIR JSON
-- **Audit Trail** — logging of who accessed what and when (no patient data in logs)
+- **Data sources** — register a clinical database and map its columns to what the app needs. No two hospitals name their notes table the same way, so the mapping is configuration rather than a code change.
+- **Dialect portability** — queries are built with SQLAlchemy Core, so the same code runs against PostgreSQL, SQL Server or a SQLite extract.
+- **Dynamic schema builder** — define output columns, types and extraction instructions in the UI.
+- **AI extraction** — Google Gemini (free tier) or Azure OpenAI, selected by config. Notes are extracted concurrently behind a bounded semaphore.
+- **Row provenance** — every extracted row carries the note and patient it came from. One note can produce several rows, so this is the only thing that keeps a row attributable.
+- **Editable results table** — review and correct extracted values; provenance columns are read-only.
+- **File upload** — parse `.txt`, `.doc/.docx`, `.pdf` into plain text.
+- **Export** — CSV, Excel or FHIR JSON.
+- **Role separation** — Admin configures data sources; Clinician browses and extracts; ReadOnly can neither.
+- **Audit trail** — logging of who accessed what and when, with no note content in the logs.
 
 ## Architecture
 
 ```
 React 18 + TypeScript SPA ──▶ nginx ──▶ FastAPI (async)
                                           ├─▶ Gemini API / Azure OpenAI
-                                          ├─▶ SQLite (default) / any SQLAlchemy DB
+                                          ├─▶ App database  (SQLite)      audit log, jobs,
+                                          │                                data source registry
+                                          ├─▶ Notes database (PostgreSQL)  the customer's system,
+                                          │                                read-only
                                           └─▶ Local file parsing (PyMuPDF, python-docx)
 ```
 
+The two databases are deliberately separate. In a real deployment the notes live in a system we do not own and hold read-only credentials to; putting our audit log inside the customer's estate is exactly what a governance review would object to.
+
 - **Backend:** FastAPI, SQLAlchemy 2 (async), Pydantic v2
-- **Frontend:** React 18, TypeScript, Vite, Tailwind, TanStack-style hooks
+- **Frontend:** React 18, TypeScript, Vite, Tailwind
 - **Infra:** Docker Compose, nginx; original Azure IaC (Bicep) kept under `infra/azure/`
 
-## Quick Start (Development)
+## Quick start (development)
+
+Development runs against SQLite — no Postgres needed. The notes database falls back to
+`DATABASE_URL` when `NOTES_DATABASE_URL` is unset, which is the dialect portability doing
+real work rather than being claimed.
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/Gouqiqiqiqi/MediExtractAI.git
 cd MediExtractAI
-cp backend/.env.example backend/.env   # add your GEMINI_API_KEY
+cp backend/.env.example backend/.env   # add your GEMINI_API_KEY, leave NOTES_DATABASE_URL blank
 docker compose -f infra/docker-compose.yml up --build
+```
+
+Then seed the synthetic notes into the SQLite file:
+
+```bash
+docker compose -f infra/docker-compose.yml exec backend python scripts/seed_notes.py
 ```
 
 - Frontend: http://localhost:5173
@@ -47,40 +80,82 @@ Or run natively: `uvicorn app.main:app --reload` in `backend/`, `npm run dev` in
 
 ## Deploy (single VM — e.g. OCI Always Free)
 
-Tested on an Oracle Cloud Always Free ARM VM (Ubuntu). All images are multi-arch.
+Runs on an Oracle Cloud Always Free ARM VM (Ubuntu). All images are multi-arch. The
+production compose file adds a PostgreSQL service that stands in for the customer's
+clinical system.
 
 ```bash
 # on the VM
 sudo apt update && sudo apt install -y docker.io docker-compose-v2
-git clone <repo-url> && cd MediExtractAI
+git clone https://github.com/Gouqiqiqiqi/MediExtractAI.git && cd MediExtractAI
+
+# the notes database password, read by docker compose
+echo "NOTES_DB_PASSWORD=$(openssl rand -hex 24)" > .env && chmod 600 .env
+
 cp backend/.env.example backend/.env
-nano backend/.env        # set GEMINI_API_KEY + APP_SECRET_KEY; keep DEMO_MODE=true
+nano backend/.env   # GEMINI_API_KEY, a random APP_SECRET_KEY, and NOTES_DATABASE_URL
+                    # with the password you just generated. Keep DEMO_MODE=true.
+
 sudo docker compose up -d --build
+sudo docker compose exec backend python scripts/seed_notes.py
 ```
 
-Then open port 80 in the OCI security list / VCN ingress rules, and browse to the VM's public IP.
+Open port **80** in two places — they are independent and both are required:
+
+1. The VM's own firewall: `sudo iptables -I INPUT -p tcp --dport 80 -m state --state NEW -j ACCEPT`, then `sudo netfilter-persistent save`
+2. The OCI security list ingress rule — the port goes in **Destination** Port Range, not Source
 
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DEMO_MODE` | `true` | `true`: no auth, demo user, synthetic data only. `false`: OIDC (Azure AD) |
+| `DEMO_MODE` | `true` | `true`: no auth, role chosen by the viewer, synthetic data only. `false`: OIDC (Azure AD) |
+| `APP_SECRET_KEY` | — | Also derives the key that encrypts stored data source passwords. Changing it invalidates them. |
 | `AI_PROVIDER` | `gemini` | `gemini` or `azure_openai` |
 | `GEMINI_API_KEY` | — | Free key from https://aistudio.google.com/apikey |
-| `DATABASE_URL` | SQLite | Any SQLAlchemy async URL |
+| `GEMINI_MODEL` | `gemini-3.5-flash` | See the quota note below before changing |
+| `DATABASE_URL` | SQLite | The app's own database: audit log, jobs, data source registry |
+| `NOTES_DATABASE_URL` | falls back to `DATABASE_URL` | The clinical notes database. Registered as the default data source on first start. |
+| `DEMO_ALLOWED_DB_HOSTS` | `notes-db,localhost,127.0.0.1` | Hosts a demo deployment may connect a data source to. Ignored when `DEMO_MODE=false`. |
+
+### A note on Gemini free-tier quota
+
+One API request is made per note, so extracting 20 notes costs 20 requests. Free-tier
+quotas are **per model and per day**, and they vary sharply: `gemini-2.5-flash` allows
+20 requests a day, which a single demo session exhausts. `gemini-3.5-flash` is the
+default here; `gemini-3.1-flash-lite` is a tested fallback. Check your key at
+https://ai.dev/rate-limit.
 
 ## Security posture
 
-Demo mode is intentionally open (synthetic data only). For a governed deployment the codebase already includes: OIDC token validation (RS256/JWKS), role-based access control (Admin / Clinician / ReadOnly), security headers + CSP, upload size/type limits, and an audit log model that never stores note content. `infra/azure/` retains the original Bicep templates for a private-endpoint Azure deployment.
+Demo mode is intentionally open, and the data is synthetic. Three things are still done
+properly, because a public unauthenticated page that accepts database connection details
+would otherwise be a liability:
 
-## Project Structure
+- **Credentials** — data source passwords are encrypted at rest with a key derived from
+  `APP_SECRET_KEY`. No response model returns a password or an assembled connection string.
+- **SSRF** — while `DEMO_MODE` is on, new data sources may only point at an allow-listed
+  host. Unauthenticated plus "connect to any host you like" is an SSRF primitive and a
+  credential-harvesting form in one.
+- **Injection** — table and column names are validated against an identifier pattern
+  before they reach a SQLAlchemy `Table`, on top of SQLAlchemy's own quoting.
+
+For a governed deployment the codebase also includes OIDC token validation (RS256/JWKS),
+role-based access control, security headers and CSP, upload size and type limits, and an
+audit log model that never stores note content. `infra/azure/` retains the original Bicep
+templates for a private-endpoint Azure deployment.
+
+## Project structure
 
 ```
 MediExtractAI/
-├── backend/            # FastAPI app (api / core / models / services) + tests
-├── frontend/           # React + TS SPA (api / auth / components / pages)
-├── infra/              # docker-compose (dev), nginx, Azure Bicep (legacy)
-└── docker-compose.yml  # production single-VM deployment
+├── backend/
+│   ├── app/            # FastAPI app (api / core / models / services)
+│   ├── scripts/        # synthetic notes + seeding
+│   └── tests/
+├── frontend/src/       # React + TS SPA (api / auth / components / lib / pages)
+├── infra/              # dev compose, nginx, Azure Bicep (legacy)
+└── docker-compose.yml  # production: frontend + backend + notes database
 ```
 
 ## License
