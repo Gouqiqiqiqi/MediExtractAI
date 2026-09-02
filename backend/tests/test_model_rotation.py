@@ -439,3 +439,37 @@ async def test_a_provider_without_a_key_never_enters_the_chain(fake_gemini):
 
     assert [m["model"] for m in chain] == ["model-a"]
     assert fake_gemini is not None
+
+
+# ── Time budget ─────────────────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_extraction_gives_up_inside_its_time_budget(fake_gemini):
+    """A request that outlives nginx and the browser client cannot report why.
+
+    Ending here instead means the caller gets the reason rather than a generic
+    network failure, so the budget has to be enforced before the model call.
+    """
+    fake = fake_gemini({}, ai_deadline_seconds=0)
+
+    with pytest.raises(RuntimeError, match="ran out of time"):
+        await ExtractionService.instance().extract(["note"], COLUMNS)
+
+    assert fake.calls == []
+
+
+@pytest.mark.anyio
+async def test_a_wait_longer_than_the_budget_is_not_taken(fake_gemini, monkeypatch):
+    """Waiting out a limit is only worth it if the request will still be alive."""
+    monkeypatch.setattr(
+        "app.services.extraction_service.asyncio.sleep",
+        lambda seconds: pytest.fail("should not wait past the deadline"),
+    )
+    fake_gemini(
+        {"model-a": gemini_429(daily=False)},
+        ai_fallback_models="",
+        ai_deadline_seconds=3,  # shorter than the 5s delay the 429 asks for
+    )
+
+    with pytest.raises(RuntimeError, match="rate limited"):
+        await ExtractionService.instance().extract(["note"], COLUMNS)

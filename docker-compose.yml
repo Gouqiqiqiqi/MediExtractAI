@@ -13,6 +13,14 @@ services:
       POSTGRES_DB: clinical_notes
     volumes:
       - notes_db_data:/var/lib/postgresql/data
+    # Cap the logs. The disk has room today, but an unbounded json-file log on
+    # a long-lived box is a slow-motion outage, and it takes the whole host with
+    # it rather than one service.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
     # Deliberately no `ports:` — the database is reachable only from the
     # compose network, never from the host or the internet.
@@ -35,6 +43,11 @@ services:
     depends_on:
       notes-db:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
@@ -50,6 +63,11 @@ services:
       - "80:80"
     depends_on:
       - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
 volumes:

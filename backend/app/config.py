@@ -61,6 +61,18 @@ class Settings(BaseSettings):
     # honest answer is a 503 — an HTTP request should not sit open for minutes.
     ai_max_wait_seconds: int = 30
 
+    # How long to wait on one model call. These models answer a note in a few
+    # seconds; a minute of silence means something is wrong, and with a chain to
+    # fall back on, giving up early and trying the next one is strictly better
+    # than waiting longer.
+    ai_request_timeout_seconds: int = 30
+
+    # Ceiling on a whole extraction request, chain walking and all. It exists to
+    # stay inside the timeouts in front of it — nginx and the browser client
+    # both cut at 120s — because a request killed out there surfaces as a
+    # generic network failure, while one that ends here can say what happened.
+    ai_deadline_seconds: int = 100
+
     # Groq and Mistral — both OpenAI-compatible, both free tiers without a card,
     # and both say in their terms that API input is not used for training, which
     # Google's free tier does not. Leaving a key blank drops that provider from

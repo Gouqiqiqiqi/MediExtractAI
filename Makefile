@@ -1,8 +1,8 @@
-.PHONY: dev build test clean
+.PHONY: dev build test clean preflight deploy
 
 # Development
 dev:
-	docker compose -f infra/docker-compose.yml up --build
+	docker compose up --build
 
 dev-backend:
 	cd backend && uvicorn app.main:app --reload --port 8000
@@ -12,7 +12,7 @@ dev-frontend:
 
 # Build
 build:
-	docker compose -f infra/docker-compose.yml build
+	docker compose build
 
 # Test
 test-backend:
@@ -31,6 +31,17 @@ lint-frontend:
 	cd frontend && npm run lint
 
 lint: lint-backend lint-frontend
+
+# Demo operations
+# Run this before showing the demo to anyone: it exercises the whole path,
+# including one real extraction, and says what is wrong rather than that
+# something is.
+preflight:
+	./scripts/preflight.sh
+
+deploy:
+	ssh oracle 'cd /data/projects/MediExtractAI && git pull --ff-only && docker compose up -d --build'
+	./scripts/preflight.sh
 
 # Clean
 clean:

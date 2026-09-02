@@ -32,6 +32,7 @@ import type {
   NotePreview,
 } from '../types';
 import { fetchNoteFilterOptions, fetchNotes } from '../api/notes';
+import { errorMessage } from '../api/errors';
 import { fetchDataSources } from '../api/dataSources';
 import { extractFromDatabase } from '../api/extraction';
 import SchemaBuilder from '../components/SchemaBuilder/SchemaBuilder';
@@ -97,8 +98,8 @@ export default function DatabaseExtractor() {
       setNotes(data.items);
       setTotalNotes(data.total);
       setPage(p);
-    } catch {
-      toast.error('Failed to load notes from the data source');
+    } catch (err) {
+      toast.error(errorMessage(err, 'Failed to load notes from the data source'));
     } finally {
       setLoadingNotes(false);
     }
@@ -213,8 +214,12 @@ export default function DatabaseExtractor() {
       setResult(res);
       saveResult(res);
       toast.success(`Extracted ${res.rows.length} rows from ${res.note_count} notes`);
-    } catch {
-      toast.error('Extraction failed — check the API logs');
+    } catch (err) {
+      // The backend says which models are exhausted and when they return.
+      // Long, but every word of it is what the reader needs next.
+      toast.error(errorMessage(err, 'Extraction failed — check the API logs'), {
+        duration: 8000,
+      });
     } finally {
       setExtracting(false);
     }

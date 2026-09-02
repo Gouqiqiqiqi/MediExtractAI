@@ -163,6 +163,25 @@ curl -s localhost:8000/api/v1/extraction/models -H 'X-Demo-Role: Admin' | python
 
 shows the chain in order and, for anything on cooldown, why and for how long.
 
+## Before a demo
+
+```bash
+make preflight            # or: scripts/preflight.sh [base-url]
+```
+
+The failures that ruin a live demo are the quiet ones: the site loads, the notes
+list looks right, and extraction returns nothing because a model was retired or
+yesterday's testing spent the day's quota. So the check presses the button —
+site, bundle, API, data source, role separation, the model chain, and one real
+extraction whose output it inspects. Exit code 0 means the demo is ready.
+
+Extraction is bounded on both ends so a failure is legible rather than a hung
+tab: `AI_REQUEST_TIMEOUT_SECONDS` per model call, `AI_DEADLINE_SECONDS` for the
+whole request. The deadline sits inside the timeouts in front of it — nginx and
+the browser client both cut at 120s — because a request killed out there
+surfaces as a generic network error, while one that ends inside the app returns
+the reason, and the UI shows that reason instead of "extraction failed".
+
 ## Security posture
 
 Demo mode is intentionally open, and the data is synthetic. Three things are still done

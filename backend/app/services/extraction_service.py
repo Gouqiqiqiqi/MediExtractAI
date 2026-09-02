@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -178,15 +179,24 @@ class ExtractionService:
                 f"provenance has {len(provenance)} entries for {len(texts)} texts"
             )
 
+        settings = self._settings
+        if settings is None:
+            raise RuntimeError("ExtractionService not initialised")
+
         total = len(texts)
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_EXTRACTIONS)
+
+        # One budget for the whole batch, because the caller is one HTTP
+        # request: twenty notes that each take their own generous timeout add
+        # up to a request nginx has already given up on.
+        deadline = time.monotonic() + settings.ai_deadline_seconds
 
         async def extract_one(index: int, text: str) -> list[dict[str, Any]]:
             async with semaphore:
                 logger.info(
                     "Extracting note %d/%d (%d chars)", index + 1, total, len(text)
                 )
-                return await self._extract_single(text, columns)
+                return await self._extract_single(text, columns, deadline)
 
         # Concurrent, but the results come back in request order, so the caller's
         # note order — and therefore the provenance pairing below — is preserved.
@@ -208,13 +218,17 @@ class ExtractionService:
         self,
         text: str,
         columns: list[ColumnDefinition],
+        deadline: float | None = None,
     ) -> list[dict[str, Any]]:
         settings = self._settings
         if settings is None:
             raise RuntimeError("ExtractionService not initialised")
 
+        if deadline is None:
+            deadline = time.monotonic() + settings.ai_deadline_seconds
+
         system_prompt, user_prompt = _build_prompts(text, columns)
-        raw = await self._generate(settings, system_prompt, user_prompt)
+        raw = await self._generate(settings, system_prompt, user_prompt, deadline)
 
         try:
             parsed = json.loads(raw)
@@ -227,7 +241,11 @@ class ExtractionService:
     # ── Rotation ──
 
     async def _generate(
-        self, settings: Settings, system_prompt: str, user_prompt: str
+        self,
+        settings: Settings,
+        system_prompt: str,
+        user_prompt: str,
+        deadline: float,
     ) -> str:
         """Call the first usable model, moving down the chain as they fail.
 
@@ -250,6 +268,14 @@ class ExtractionService:
         tried: set[str] = set()
         waited: set[str] = set()
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    "Extraction ran out of time before a model answered. "
+                    f"Models tried: {rotation.describe_waits()}. Select fewer "
+                    "notes, or try again once a model is back."
+                )
+
             candidate = rotation.next_available(tried)
 
             if candidate is None:
@@ -263,7 +289,7 @@ class ExtractionService:
                         "Every AI model in the chain failed for this note: "
                         f"{rotation.describe_waits()}"
                     )
-                if wait > settings.ai_max_wait_seconds:
+                if wait > settings.ai_max_wait_seconds or wait >= remaining:
                     raise RuntimeError(
                         "All AI models are rate limited — "
                         f"{rotation.describe_waits()}. Add another model to "
@@ -281,8 +307,12 @@ class ExtractionService:
                 tried.discard(candidate.label)
                 continue
 
+            # Never wait longer on one model than the whole request has left.
+            timeout = min(float(settings.ai_request_timeout_seconds), remaining)
             try:
-                raw = await self._call(candidate, settings, system_prompt, user_prompt)
+                raw = await self._call(
+                    candidate, settings, system_prompt, user_prompt, timeout
+                )
             except ProviderError as exc:
                 tried.add(candidate.label)
                 rotation.block(candidate, exc.cooldown_seconds, exc.reason)
@@ -308,10 +338,11 @@ class ExtractionService:
         settings: Settings,
         system_prompt: str,
         user_prompt: str,
+        timeout: float,
     ) -> str:
         if candidate.provider == "gemini":
             return await self._call_gemini(
-                settings, candidate.model, system_prompt, user_prompt
+                settings, candidate.model, system_prompt, user_prompt, timeout
             )
         if candidate.provider in OPENAI_COMPATIBLE_ENDPOINTS:
             return await self._call_openai_compatible(
@@ -320,9 +351,10 @@ class ExtractionService:
                 candidate.model,
                 system_prompt,
                 user_prompt,
+                timeout,
             )
         return await self._call_azure_openai(
-            settings, candidate.model, system_prompt, user_prompt
+            settings, candidate.model, system_prompt, user_prompt, timeout
         )
 
     # ── Providers ──
@@ -330,7 +362,12 @@ class ExtractionService:
     # above does not have to know one provider's error shapes from another's.
 
     async def _call_gemini(
-        self, settings: Settings, model: str, system_prompt: str, user_prompt: str
+        self,
+        settings: Settings,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        timeout: float,
     ) -> str:
         if not settings.gemini_api_key:
             raise ProviderError(
@@ -350,7 +387,7 @@ class ExtractionService:
             },
         }
         try:
-            async with httpx.AsyncClient(timeout=90) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(
                     url,
                     params={"key": settings.gemini_api_key},
@@ -433,6 +470,7 @@ class ExtractionService:
         model: str,
         system_prompt: str,
         user_prompt: str,
+        timeout: float,
     ) -> str:
         """Call any provider that speaks OpenAI's /chat/completions.
 
@@ -463,7 +501,7 @@ class ExtractionService:
         url = f"{OPENAI_COMPATIBLE_ENDPOINTS[provider]}/chat/completions"
 
         try:
-            async with httpx.AsyncClient(timeout=90) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(
                     url,
                     headers={"Authorization": f"Bearer {api_key}"},
@@ -573,7 +611,12 @@ class ExtractionService:
         return ExtractionService._azure_client
 
     async def _call_azure_openai(
-        self, settings: Settings, deployment: str, system_prompt: str, user_prompt: str
+        self,
+        settings: Settings,
+        deployment: str,
+        system_prompt: str,
+        user_prompt: str,
+        timeout: float,
     ) -> str:
         client = self._get_azure_client(settings)
         try:
@@ -586,6 +629,7 @@ class ExtractionService:
                 temperature=0.0,
                 max_tokens=4096,
                 response_format={"type": "json_object"},
+                timeout=timeout,
             )
         except Exception as exc:  # noqa: BLE001 — classified below, then re-raised
             raise self._azure_error(settings, deployment, exc) from exc

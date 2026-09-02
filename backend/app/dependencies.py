@@ -68,6 +68,13 @@ async def build_repository(
 async def get_notes_repository(
     session: DbSession,
     settings: SettingsDep,
+    # Depending on the authenticated user rather than trusting the endpoint's
+    # own role check to run first. FastAPI resolves a sub-dependency before the
+    # dependency that needs it, so this is what puts authentication ahead of
+    # the data source lookup — without it an anonymous request was answered
+    # with 404 "no data source configured", which is both the wrong status and
+    # a sliver of deployment state given away before anyone logged in.
+    user: CurrentUser,
     source_id: Annotated[str | None, Query(description="Data source to read from")] = None,
 ) -> NotesRepository:
     return await build_repository(session, settings, source_id)

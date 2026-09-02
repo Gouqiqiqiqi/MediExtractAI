@@ -19,7 +19,6 @@ from app.models.schemas import (
     DataSourceUpdate,
 )
 from app.services.database_service import (
-    DataSourceError,
     SourceConfig,
     build_url,
     check_host_allowed,

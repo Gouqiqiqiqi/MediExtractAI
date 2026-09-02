@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 import { FileText, Play, Table2 } from 'lucide-react';
 import type { ColumnDefinition, ExtractionResponse } from '../types';
 import { extractFromText } from '../api/extraction';
+import { errorMessage } from '../api/errors';
 import FileUpload from '../components/FileUpload/FileUpload';
 import SchemaBuilder from '../components/SchemaBuilder/SchemaBuilder';
 import DataTable from '../components/DataTable/DataTable';
@@ -49,8 +50,10 @@ export default function FileExtractor() {
       setResult(res);
       saveResult(res);
       toast.success(`Extracted ${res.rows.length} rows`);
-    } catch {
-      toast.error('Extraction failed — check the API logs');
+    } catch (err) {
+      toast.error(errorMessage(err, 'Extraction failed — check the API logs'), {
+        duration: 8000,
+      });
     } finally {
       setExtracting(false);
     }
