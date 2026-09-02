@@ -42,9 +42,7 @@ export default function StepPanel({
   flush = false,
 }: Props) {
   return (
-    <section
-      className={`panel ${status === 'todo' ? 'border-outline' : 'border-outline'}`}
-    >
+    <section className="panel">
       <header className="panel-header">
         <div className="flex items-center gap-2.5 min-w-0">
           <span
@@ -53,7 +51,13 @@ export default function StepPanel({
           >
             {status === 'done' ? <Check size={12} strokeWidth={3} /> : index}
           </span>
-          <h2 className="text-title-lg text-on-surface truncate">{title}</h2>
+          <h2
+            className={`text-title-lg truncate ${
+              status === 'todo' ? 'text-on-surface-variant' : 'text-on-surface'
+            }`}
+          >
+            {title}
+          </h2>
           {summary && (
             <span className="text-label-md text-on-surface-variant truncate">
               {summary}

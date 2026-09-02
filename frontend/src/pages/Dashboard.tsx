@@ -35,6 +35,10 @@ export default function Dashboard() {
   const { role, isAdmin, canExtract } = useRole();
   const [sources, setSources] = useState<DataSource[] | null>(null);
   const [noteCount, setNoteCount] = useState<number | null>(null);
+  // Distinct from `noteCount === null`, which means "still loading". Without
+  // this a failed request renders identically to a pending one, under a hint
+  // claiming the number came from the default data source.
+  const [noteCountFailed, setNoteCountFailed] = useState(false);
   const [lastResult, setLastResult] = useState<SavedResult | null>(null);
 
   useEffect(() => {
@@ -48,7 +52,7 @@ export default function Dashboard() {
       // page_size=1 — we only want the total, not the page.
       fetchNotes(1, 1)
         .then((d) => setNoteCount(d.total))
-        .catch(() => setNoteCount(null));
+        .catch(() => setNoteCountFailed(true));
     }
   }, [canExtract]);
 
@@ -62,8 +66,18 @@ export default function Dashboard() {
     },
     {
       label: 'Notes reachable',
-      value: noteCount === null ? (canExtract ? '—' : 'n/a') : noteCount.toLocaleString(),
-      hint: canExtract ? 'In the default data source' : 'Your role cannot read notes',
+      value: !canExtract
+        ? 'n/a'
+        : noteCountFailed
+          ? 'Unavailable'
+          : noteCount === null
+            ? '—'
+            : noteCount.toLocaleString(),
+      hint: !canExtract
+        ? 'Your role cannot read notes'
+        : noteCountFailed
+          ? 'Could not reach the data source'
+          : 'In the default data source',
     },
     {
       label: 'Last extraction',
@@ -126,13 +140,13 @@ export default function Dashboard() {
         {stats.map((s) => (
           <div key={s.label} className="bg-surface px-4 py-3.5">
             <p className="text-label-sm text-on-surface-variant/80">{s.label}</p>
-            <p className="text-headline-lg text-on-surface mt-1 tabular truncate">
+            <div className="text-headline-lg text-on-surface mt-1 tabular truncate">
               {sources === null && s.label === 'Data sources' ? (
                 <SkeletonBlock className="h-6 w-12 mt-1" />
               ) : (
                 s.value
               )}
-            </p>
+            </div>
             {s.hint && (
               <p className="text-label-md text-on-surface-variant mt-1 truncate" title={s.hint}>
                 {s.hint}

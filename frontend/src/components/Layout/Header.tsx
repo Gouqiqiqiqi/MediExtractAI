@@ -16,20 +16,25 @@ export default function Header() {
   const [term, setTerm] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // ⌘K / Ctrl-K, or "/" when not already typing.
+  // ⌘K / Ctrl-K, or "/" when not already typing. Only bound when the input is
+  // actually rendered — otherwise the shortcut would swallow the keystroke and
+  // then have nothing to focus.
   useEffect(() => {
+    if (!canExtract) return;
     const onKey = (e: KeyboardEvent) => {
+      if (!inputRef.current) return;
       const typing =
         e.target instanceof HTMLElement &&
         ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName);
-      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !typing)) {
-        e.preventDefault();
-        inputRef.current?.focus();
-      }
+      const shortcut =
+        (e.key === 'k' && (e.metaKey || e.ctrlKey) && !typing) || (e.key === '/' && !typing);
+      if (!shortcut) return;
+      e.preventDefault();
+      inputRef.current.focus();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [canExtract]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();

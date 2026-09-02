@@ -2,7 +2,7 @@
  * Results — review, correct and export the latest extraction.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Database, Download, FileJson, FileSpreadsheet, Table2 } from 'lucide-react';
@@ -17,6 +17,13 @@ export default function Results() {
   useEffect(() => {
     setResult(loadResult());
   }, []);
+
+  // Memoised: a fresh [] each render would change identity every time and
+  // defeat DataTable's column memo.
+  const provenance = useMemo(
+    () => result?.provenance_columns ?? [],
+    [result?.provenance_columns],
+  );
 
   const handleExportCsv = async () => {
     if (!result) return;
@@ -63,8 +70,6 @@ export default function Results() {
       </div>
     );
   }
-
-  const provenance = result.provenance_columns ?? [];
 
   return (
     <div className="max-w-6xl mx-auto space-y-4">

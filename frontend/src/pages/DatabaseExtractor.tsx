@@ -47,6 +47,10 @@ export default function DatabaseExtractor() {
   const [notes, setNotes] = useState<NotePreview[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState(searchParams.get('q') ?? '');
+  // The term the currently displayed page was fetched with. Paging must reuse
+  // it: typing a new term without pressing Search and then hitting Next would
+  // otherwise fetch page 2 of a different query.
+  const [activeQuery, setActiveQuery] = useState('');
   const [loadingNotes, setLoadingNotes] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [totalNotes, setTotalNotes] = useState(0);
@@ -75,6 +79,7 @@ export default function DatabaseExtractor() {
     setHasSearched(true);
     try {
       const data = await fetchNotes(p, PAGE_SIZE, term || undefined, sourceId || undefined);
+      setActiveQuery(term);
       setNotes(data.items);
       setTotalNotes(data.total);
       setPage(p);
@@ -106,6 +111,7 @@ export default function DatabaseExtractor() {
     setPreviewNote(null);
     setHasSearched(false);
     setTotalNotes(0);
+    setActiveQuery('');
   };
 
   const toggle = (id: string) => {
@@ -377,14 +383,14 @@ export default function DatabaseExtractor() {
                   </span>
                   <div className="flex gap-1.5">
                     <button
-                      onClick={() => loadNotes(page - 1)}
+                      onClick={() => loadNotes(page - 1, activeQuery)}
                       disabled={page <= 1}
                       className="btn-outlined py-1.5 px-2.5"
                     >
                       <ChevronLeft size={14} /> Previous
                     </button>
                     <button
-                      onClick={() => loadNotes(page + 1)}
+                      onClick={() => loadNotes(page + 1, activeQuery)}
                       disabled={page >= lastPage}
                       className="btn-outlined py-1.5 px-2.5"
                     >
@@ -471,6 +477,14 @@ export default function DatabaseExtractor() {
               columns={result.columns}
               data={result.rows}
               readOnlyColumns={result.provenance_columns}
+              onDataChange={(rows) => {
+                // Corrections made here have to reach the stored result too,
+                // or the Results page and any export would hand back the
+                // pre-edit values.
+                const updated = { ...result, rows };
+                setResult(updated);
+                saveResult(updated);
+              }}
             />
           </StepPanel>
         )}

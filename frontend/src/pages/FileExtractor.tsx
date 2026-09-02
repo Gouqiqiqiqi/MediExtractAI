@@ -132,6 +132,14 @@ export default function FileExtractor() {
               columns={result.columns}
               data={result.rows}
               readOnlyColumns={result.provenance_columns}
+              onDataChange={(rows) => {
+                // Corrections made here have to reach the stored result too,
+                // or the Results page and any export would hand back the
+                // pre-edit values.
+                const updated = { ...result, rows };
+                setResult(updated);
+                saveResult(updated);
+              }}
             />
           </StepPanel>
         )}
