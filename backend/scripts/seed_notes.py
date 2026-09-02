@@ -28,6 +28,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from sqlalchemy import (  # noqa: E402
     Column,
+    Index,
     Date,
     MetaData,
     String,
@@ -57,6 +58,13 @@ medical_notes = Table(
     Column("author", String(255)),
     Column("specialty", String(128)),
     Column("note_text", Text),
+    # The browser orders by date and filters on type and author. At demo scale
+    # this makes no measurable difference; on a real clinical table it is the
+    # difference between a filter and a full scan, and it is what you would ask
+    # a customer's DBA for before pointing the tool at their warehouse.
+    Index("ix_medical_notes_note_date", "note_date"),
+    Index("ix_medical_notes_specialty", "specialty"),
+    Index("ix_medical_notes_author", "author"),
 )
 
 
@@ -73,6 +81,9 @@ clinical_documents = Table(
     Column("clinician_name", String(255)),
     Column("service", String(128)),
     Column("doc_body", Text),
+    Index("ix_clinical_documents_authored_on", "authored_on"),
+    Index("ix_clinical_documents_service", "service"),
+    Index("ix_clinical_documents_clinician", "clinician_name"),
 )
 
 # Which of the synthetic notes belong to the "clinic letters" system.
@@ -146,6 +157,12 @@ async def seed(force: bool = False) -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
+        # create_all skips a table that already exists, indexes included, so an
+        # index added after the first seed would never appear. Create them
+        # explicitly with checkfirst.
+        for table in metadata.tables.values():
+            for index in table.indexes:
+                await conn.run_sync(index.create, checkfirst=True)
         notes_total = await _seed_table(
             conn, medical_notes, note_rows, "medical_notes", force
         )

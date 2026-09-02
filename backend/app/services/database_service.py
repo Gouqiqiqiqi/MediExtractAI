@@ -270,7 +270,11 @@ class NotesRepository:
         if date_from is not None:
             clauses.append(c[cfg.col_date] >= date_from)
         if date_to is not None:
-            clauses.append(c[cfg.col_date] <= date_to)
+            # Strictly-less-than the following midnight rather than <= the date.
+            # The mapped column is declared here as a Date, but the customer's
+            # real column may be a timestamp — and "<= 2026-03-14" against a
+            # timestamp excludes everything written that day after midnight.
+            clauses.append(c[cfg.col_date] < date_to + dt.timedelta(days=1))
 
         return clauses
 
@@ -312,6 +316,13 @@ class NotesRepository:
         Read from the data, not hard-coded: what counts as a note type is
         whatever the customer's system happens to put in that column, and it
         differs between deployments of the same vendor's software.
+
+        ``SELECT DISTINCT`` over a large table is a scan unless the column is
+        indexed, and this runs once per source selection. That is fine at the
+        scale of a note-type column, which has tens of values; the author list
+        is the one to watch on a real deployment, where it may be better served
+        by a staff table than by asking the notes table who has ever written
+        one. ``limit`` is the blunt guard until that decision is made.
         """
         cfg = self._cfg
         c = self._c

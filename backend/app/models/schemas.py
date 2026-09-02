@@ -87,6 +87,14 @@ class NoteListResponse(BaseModel):
 # the schema entirely rather than relying on the quoting alone.
 IDENTIFIER_RE = r"^[A-Za-z_][A-Za-z0-9_$]{0,62}(\.[A-Za-z_][A-Za-z0-9_$]{0,62})?$"
 
+# Same shape, but empty is also allowed. Written out rather than composed from
+# the one above: pydantic v2 matches with search semantics, so an alternation
+# built by stripping the leading "^" would leave the identifier branch
+# unanchored and accept anything ending in something identifier-shaped.
+OPTIONAL_IDENTIFIER_RE = (
+    r"^(?:[A-Za-z_][A-Za-z0-9_$]{0,62}(?:\.[A-Za-z_][A-Za-z0-9_$]{0,62})?)?$"
+)
+
 
 class DbEngine(StrEnum):
     POSTGRESQL = "postgresql"
@@ -105,7 +113,7 @@ class ColumnMapping(BaseModel):
     # Optional: the column holding the kind of note (nursing, outpatient,
     # inpatient, a specialty). Empty when the source has no such column, in
     # which case the type filter is simply not offered.
-    note_type: str = Field(default="", pattern=rf"^$|{IDENTIFIER_RE[1:]}")
+    note_type: str = Field(default="", pattern=OPTIONAL_IDENTIFIER_RE)
 
 
 class DataSourceBase(BaseModel):

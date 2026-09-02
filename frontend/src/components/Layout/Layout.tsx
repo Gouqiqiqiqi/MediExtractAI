@@ -1,6 +1,8 @@
+import { Suspense } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import Loading from '../common/Loading';
 
 export default function Layout() {
   return (
@@ -10,7 +12,12 @@ export default function Layout() {
         <Header />
         <main className="flex-1 overflow-auto">
           <div className="px-6 py-5">
-            <Outlet />
+            {/* Inside the shell, not around it. A boundary placed outside the
+                layout would swap the sidebar and header for a spinner every
+                time a lazily-loaded page was opened. */}
+            <Suspense fallback={<Loading message="Loading page…" />}>
+              <Outlet />
+            </Suspense>
           </div>
         </main>
       </div>

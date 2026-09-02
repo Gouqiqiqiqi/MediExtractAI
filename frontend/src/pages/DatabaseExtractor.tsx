@@ -103,6 +103,8 @@ export default function DatabaseExtractor() {
     }
   };
 
+  const handedOverQuery = searchParams.get('q');
+
   // ── When a source is chosen: load its filter values and list everything ──
   // Listing on arrival rather than making the user press Search first: the
   // notes are the point of the page, and an empty table teaches nothing about
@@ -113,13 +115,25 @@ export default function DatabaseExtractor() {
       .then(setFilterOptions)
       .catch(() => setFilterOptions(null));
 
-    const q = searchParams.get('q');
-    const initial: NoteFilters = { ...EMPTY_FILTERS, search: q ?? '' };
-    setFilters(initial);
-    void loadNotes(1, initial);
-    if (q !== null) setSearchParams({}, { replace: true });
+    // A query handed over from the header is applied by the effect below.
+    // Listing here as well would fetch twice and then show the unfiltered list.
+    if (handedOverQuery !== null) return;
+    void loadNotes(1, EMPTY_FILTERS);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceId, searchParams]);
+  }, [sourceId]);
+
+  // ── Search handed over from the header ──
+  // Keyed on the query itself rather than the whole search-params object:
+  // clearing the parameter below changes that object, and depending on it
+  // would re-run this effect and immediately discard the query it just applied.
+  useEffect(() => {
+    if (handedOverQuery === null || !sourceId) return;
+    const next: NoteFilters = { ...EMPTY_FILTERS, search: handedOverQuery };
+    setFilters(next);
+    void loadNotes(1, next);
+    setSearchParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handedOverQuery, sourceId]);
 
   // A note ID from one system means nothing in another, so changing source
   // must not carry a stale selection across.
@@ -262,7 +276,7 @@ export default function DatabaseExtractor() {
           }
           summary={
             selectedIds.size > 0
-              ? `${selectedIds.size} of ${totalNotes} selected`
+              ? `${selectedIds.size} selected`
               : totalNotes > 0
                 ? `${totalNotes} note${totalNotes === 1 ? '' : 's'}${
                     appliedActive > 0 ? ' matching' : ''
