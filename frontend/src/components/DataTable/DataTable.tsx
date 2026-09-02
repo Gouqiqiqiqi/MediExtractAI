@@ -1,8 +1,12 @@
 /**
- * DataTable — renders extraction results with inline editing using TanStack Table.
+ * DataTable — extraction results, with inline correction.
+ *
+ * A review surface: dense rows, a sticky header so the column you are checking
+ * stays named while you scroll, and provenance columns pinned at the left as
+ * read-only text.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -16,10 +20,26 @@ interface Props {
   columns: ColumnDefinition[];
   data: Record<string, unknown>[];
   onDataChange?: (data: Record<string, unknown>[]) => void;
+  /**
+   * Columns rendered as read-only text. Used for provenance — which note a row
+   * came from is a record of fact, not a value a reviewer should be able to
+   * edit away from the note it describes.
+   */
+  readOnlyColumns?: string[];
 }
 
-export default function DataTable({ columns, data, onDataChange }: Props) {
+export default function DataTable({
+  columns,
+  data,
+  onDataChange,
+  readOnlyColumns = [],
+}: Props) {
   const [tableData, setTableData] = useState(data);
+  const readOnly = useMemo(() => new Set(readOnlyColumns), [readOnlyColumns]);
+
+  // A fresh extraction replaces the rows; without this the table would keep
+  // showing the previous run's data.
+  useEffect(() => setTableData(data), [data]);
 
   const updateCell = (rowIndex: number, columnId: string, value: unknown) => {
     const updated = tableData.map((row, i) =>
@@ -33,30 +53,48 @@ export default function DataTable({ columns, data, onDataChange }: Props) {
     () => [
       {
         id: 'row_number',
-        header: '#',
+        header: () => <span className="text-on-surface-variant/70">#</span>,
         cell: ({ row }) => (
-          <span className="text-on-surface-variant text-label-md">{row.index + 1}</span>
+          <span className="text-label-md text-on-surface-variant tabular">
+            {row.index + 1}
+          </span>
         ),
-        size: 40,
+        size: 36,
       },
-      ...columns.map((col) => ({
-        accessorKey: col.name,
-        header: () => (
-          <div>
-            <span className="font-medium text-on-surface">{col.name}</span>
-            <span className="text-label-md text-on-surface-variant ml-1">({col.data_type})</span>
-          </div>
-        ),
-        cell: ({ row, column }: { row: { index: number; original: Record<string, unknown> }; column: { id: string } }) => (
-          <EditableCell
-            value={row.original[column.id]}
-            onChange={(val) => updateCell(row.index, column.id, val)}
-            dataType={col.data_type}
-          />
-        ),
-      })),
+      ...columns.map((col) => {
+        const isReadOnly = readOnly.has(col.name);
+        return {
+          accessorKey: col.name,
+          header: () => (
+            <span className="flex items-baseline gap-1.5 whitespace-nowrap">
+              <span className="text-title-sm text-on-surface">{col.name}</span>
+              <span className="text-label-sm text-on-surface-variant/70 normal-case">
+                {isReadOnly ? 'source' : col.data_type}
+              </span>
+            </span>
+          ),
+          cell: ({
+            row,
+            column,
+          }: {
+            row: { index: number; original: Record<string, unknown> };
+            column: { id: string };
+          }) =>
+            isReadOnly ? (
+              <span className="mono text-on-surface-variant whitespace-nowrap">
+                {String(row.original[column.id] ?? '')}
+              </span>
+            ) : (
+              <EditableCell
+                value={row.original[column.id]}
+                onChange={(val) => updateCell(row.index, column.id, val)}
+                dataType={col.data_type}
+              />
+            ),
+        };
+      }),
     ],
-    [columns, tableData],
+    [columns, tableData, readOnly],
   );
 
   const table = useReactTable({
@@ -67,7 +105,7 @@ export default function DataTable({ columns, data, onDataChange }: Props) {
 
   if (tableData.length === 0) {
     return (
-      <div className="card-elevated text-center py-12">
+      <div className="card px-6 py-12 text-center">
         <p className="text-body-md text-on-surface-variant">
           No extraction results yet. Run an extraction to see data here.
         </p>
@@ -76,16 +114,16 @@ export default function DataTable({ columns, data, onDataChange }: Props) {
   }
 
   return (
-    <div className="card-elevated overflow-hidden p-0">
-      <div className="overflow-x-auto">
-        <table className="w-full text-body-md">
-          <thead>
+    <div className="card overflow-hidden">
+      <div className="overflow-x-auto max-h-[32rem] overflow-y-auto">
+        <table className="w-full border-collapse">
+          <thead className="sticky top-0 z-10">
             {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id} className="bg-surface-container border-b border-outline/40">
+              <tr key={headerGroup.id} className="bg-surface-dim">
                 {headerGroup.headers.map((header) => (
                   <th
                     key={header.id}
-                    className="text-left px-4 py-3 text-label-lg font-medium text-on-surface-variant"
+                    className="text-left px-3 py-2 border-b border-outline font-normal"
                   >
                     {flexRender(header.column.columnDef.header, header.getContext())}
                   </th>
@@ -97,10 +135,11 @@ export default function DataTable({ columns, data, onDataChange }: Props) {
             {table.getRowModel().rows.map((row) => (
               <tr
                 key={row.id}
-                className="border-b border-outline/20 hover:bg-surface-container transition-colors duration-150"
+                className="border-b border-outline-variant last:border-0 hover:bg-surface-dim
+                           transition-colors duration-100"
               >
                 {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="px-4 py-2.5">
+                  <td key={cell.id} className="px-3 py-1.5 align-top">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
                 ))}
@@ -110,8 +149,15 @@ export default function DataTable({ columns, data, onDataChange }: Props) {
         </table>
       </div>
 
-      <div className="px-4 py-3 bg-surface-container border-t border-outline/40 text-label-md text-on-surface-variant">
-        {tableData.length} row{tableData.length !== 1 ? 's' : ''} extracted
+      <div className="px-3 py-2 border-t border-outline bg-surface-dim flex items-center gap-2">
+        <span className="text-label-md text-on-surface-variant tabular">
+          {tableData.length} row{tableData.length === 1 ? '' : 's'}
+        </span>
+        {onDataChange && (
+          <span className="text-label-md text-on-surface-variant/80">
+            · click any editable cell to correct it
+          </span>
+        )}
       </div>
     </div>
   );

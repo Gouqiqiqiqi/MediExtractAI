@@ -11,6 +11,7 @@ httpx==0.28.*
 sqlalchemy==2.0.*
 aiosqlite==0.20.*
 alembic==1.14.*
+asyncpg==0.30.*          # Postgres source databases
 
 # Optional providers (uncomment if needed)
 # openai==1.59.*          # AI_PROVIDER=azure_openai

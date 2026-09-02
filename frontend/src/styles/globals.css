@@ -2,102 +2,208 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@300;400;500&display=swap');
-
 @layer base {
   body {
-    @apply text-on-surface antialiased bg-surface-dim;
-    font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
+    @apply text-on-surface antialiased bg-surface-dim text-body-md;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'tnum';
   }
 
   ::selection {
     @apply bg-gm-blue-surface text-on-surface;
   }
+
+  /* Tabular figures everywhere numbers are compared down a column. */
+  table,
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* A single, consistent focus ring rather than each component inventing one. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-gm-blue/40 ring-offset-1 ring-offset-surface;
+  }
+
+  ::-webkit-scrollbar {
+    @apply w-2.5 h-2.5;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-container-highest rounded-full border-2 border-solid border-transparent bg-clip-content;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-on-surface-variant/40;
+  }
 }
 
 @layer components {
-  /* ── Google-style Filled Button ── */
+  /* ══ Buttons ══════════════════════════════════════════════════════════ */
+  /* Compact by default. A tool's buttons sit in toolbars, not hero sections. */
+
   .btn-filled {
-    @apply bg-gm-blue text-white px-6 py-2.5 rounded-gm-xl text-label-lg
-           hover:bg-gm-blue-hover hover:shadow-gm-1 transition-all duration-200
-           focus:outline-none focus-visible:ring-2 focus-visible:ring-gm-blue focus-visible:ring-offset-2
-           disabled:bg-surface-container-high disabled:text-on-surface-variant disabled:shadow-none disabled:cursor-not-allowed
-           active:scale-[0.98];
+    @apply inline-flex items-center justify-center gap-1.5 bg-gm-blue text-white
+           px-3.5 py-2 rounded-gm-md text-label-lg border border-gm-blue
+           hover:bg-gm-blue-hover hover:border-gm-blue-hover
+           transition-colors duration-150
+           disabled:bg-surface-container-high disabled:border-outline
+           disabled:text-on-surface-variant disabled:cursor-not-allowed;
   }
 
-  /* ── Google-style Outlined Button ── */
   .btn-outlined {
-    @apply bg-transparent text-gm-blue border border-outline px-6 py-2.5 rounded-gm-xl text-label-lg
-           hover:bg-gm-blue-light transition-all duration-200
-           focus:outline-none focus-visible:ring-2 focus-visible:ring-gm-blue focus-visible:ring-offset-2
-           active:scale-[0.98];
+    @apply inline-flex items-center justify-center gap-1.5 bg-surface text-on-surface
+           border border-outline px-3.5 py-2 rounded-gm-md text-label-lg
+           hover:bg-surface-container hover:border-outline
+           transition-colors duration-150
+           disabled:text-on-surface-variant disabled:bg-surface-container
+           disabled:cursor-not-allowed;
   }
 
-  /* ── Google-style Tonal Button ── */
   .btn-tonal {
-    @apply bg-gm-blue-light text-gm-blue px-6 py-2.5 rounded-gm-xl text-label-lg
-           hover:shadow-gm-1 transition-all duration-200
-           focus:outline-none focus-visible:ring-2 focus-visible:ring-gm-blue focus-visible:ring-offset-2
-           active:scale-[0.98];
+    @apply inline-flex items-center justify-center gap-1.5 bg-gm-blue-light text-gm-blue
+           border border-gm-blue-surface px-3.5 py-2 rounded-gm-md text-label-lg
+           hover:bg-gm-blue-surface transition-colors duration-150;
   }
 
-  /* ── Google-style Text Button ── */
   .btn-text {
-    @apply bg-transparent text-gm-blue px-3 py-2 rounded-gm-xl text-label-lg
-           hover:bg-gm-blue-light transition-all duration-200
-           focus:outline-none focus-visible:ring-2 focus-visible:ring-gm-blue focus-visible:ring-offset-2;
+    @apply inline-flex items-center justify-center gap-1.5 bg-transparent text-on-surface-variant
+           px-2 py-1.5 rounded-gm-md text-label-lg
+           hover:bg-surface-container hover:text-on-surface transition-colors duration-150;
   }
 
-  /* ── Google-style Danger Button ── */
   .btn-danger {
-    @apply bg-gm-red text-white px-6 py-2.5 rounded-gm-xl text-label-lg
-           hover:shadow-gm-1 transition-all duration-200
-           focus:outline-none focus-visible:ring-2 focus-visible:ring-gm-red focus-visible:ring-offset-2;
+    @apply inline-flex items-center justify-center gap-1.5 bg-gm-red text-white
+           border border-gm-red px-3.5 py-2 rounded-gm-md text-label-lg
+           hover:brightness-110 transition-all duration-150;
   }
 
-  /* ── Google-style Card ── */
+  .btn-icon {
+    @apply inline-flex items-center justify-center w-8 h-8 rounded-gm-md
+           text-on-surface-variant hover:bg-surface-container hover:text-on-surface
+           transition-colors duration-150;
+  }
+
+  /* ══ Surfaces ═════════════════════════════════════════════════════════ */
+  /* Hairline borders, not shadows. Shadows are for menus and dialogs only. */
+
   .card {
-    @apply bg-surface rounded-gm-md p-6 border border-outline/50 transition-shadow duration-200;
+    @apply bg-surface rounded-gm-lg border border-outline;
   }
 
   .card-elevated {
-    @apply bg-surface rounded-gm-md p-6 shadow-gm-1 hover:shadow-gm-2 transition-shadow duration-200;
+    @apply bg-surface rounded-gm-lg border border-outline p-4;
   }
 
-  /* ── Google-style Input ── */
+  /* A card whose header is a distinct band — used for the workflow steps. */
+  .panel {
+    @apply bg-surface rounded-gm-lg border border-outline overflow-hidden;
+  }
+
+  .panel-header {
+    @apply flex items-center justify-between gap-3 px-4 py-3 border-b border-outline bg-surface;
+  }
+
+  .panel-body {
+    @apply p-4;
+  }
+
+  /* ══ Forms ════════════════════════════════════════════════════════════ */
+
   .input-field {
-    @apply w-full px-4 py-3 bg-surface border border-outline rounded-gm-sm text-body-md text-on-surface
-           focus:outline-none focus:border-gm-blue focus:ring-1 focus:ring-gm-blue
-           placeholder:text-on-surface-variant transition-colors duration-200;
+    @apply w-full px-3 py-2 bg-surface border border-outline rounded-gm-md
+           text-body-md text-on-surface placeholder:text-on-surface-variant/70
+           focus:outline-none focus:border-gm-blue focus:ring-2 focus:ring-gm-blue/25
+           disabled:bg-surface-container disabled:text-on-surface-variant
+           transition-colors duration-150;
+  }
+
+  .select-field {
+    @apply input-field appearance-none bg-no-repeat pr-8;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235b6472' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-position: right 0.6rem center;
   }
 
   .label {
-    @apply block text-label-lg text-on-surface-variant mb-1.5;
+    @apply block text-label-md text-on-surface-variant mb-1;
   }
 
-  /* ── Google-style Chips ── */
+  .hint {
+    @apply block text-label-md text-on-surface-variant/90 mt-1;
+  }
+
+  /* ══ Chips & badges ═══════════════════════════════════════════════════ */
+
   .chip {
-    @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-gm-sm text-label-md
-           border border-outline bg-surface text-on-surface
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-gm-sm text-label-md
+           border border-outline bg-surface text-on-surface-variant
            hover:bg-surface-container transition-colors duration-150 cursor-pointer select-none;
   }
 
   .chip-selected {
-    @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-gm-sm text-label-md
-           border-0 bg-gm-blue-light text-gm-blue
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-gm-sm text-label-md
+           border border-gm-blue-surface bg-gm-blue-light text-gm-blue
            transition-colors duration-150 cursor-pointer select-none;
   }
 
-  /* ── Google-style Checkbox ── */
-  .checkbox-gm {
-    @apply w-[18px] h-[18px] rounded-sm border-2 border-on-surface-variant
-           checked:bg-gm-blue checked:border-gm-blue focus:ring-2 focus:ring-gm-blue/30
-           transition-colors duration-150 cursor-pointer accent-gm-blue;
+  .badge {
+    @apply inline-flex items-center gap-1 px-1.5 py-0.5 rounded-gm-sm
+           text-label-sm uppercase border;
   }
 
-  /* ── Divider ── */
+  .badge-neutral {
+    @apply badge border-outline bg-surface-container text-on-surface-variant;
+  }
+
+  .badge-info {
+    @apply badge border-gm-blue-surface bg-gm-blue-light text-gm-blue;
+  }
+
+  .badge-success {
+    @apply badge border-gm-green/25 bg-gm-green-light text-gm-green;
+  }
+
+  .badge-warning {
+    @apply badge border-gm-yellow/25 bg-gm-yellow-light text-gm-yellow;
+  }
+
+  .badge-danger {
+    @apply badge border-gm-red/25 bg-gm-red-light text-gm-red;
+  }
+
+  /* ══ Misc ═════════════════════════════════════════════════════════════ */
+
+  .checkbox-gm {
+    @apply w-4 h-4 rounded-[3px] border border-on-surface-variant/50
+           text-gm-blue accent-gm-blue focus:ring-2 focus:ring-gm-blue/30
+           transition-colors duration-150 cursor-pointer;
+  }
+
   .divider {
     @apply border-t border-outline;
   }
-}
 
+  /* Technical values — IDs, table and column names, connection strings. Set in
+     mono so an operator can tell at a glance what is a literal identifier and
+     what is prose. */
+  .mono {
+    @apply font-mono text-[0.8125rem] text-on-surface;
+  }
+
+  .kbd {
+    @apply inline-flex items-center px-1.5 py-0.5 rounded-gm-sm border border-outline
+           bg-surface-container font-mono text-label-sm text-on-surface-variant;
+  }
+
+  .skeleton {
+    @apply bg-surface-container-high rounded-gm-sm animate-pulse;
+  }
+
+  /* Page heading block — every page opens the same way. */
+  .page-title {
+    @apply text-display-sm text-on-surface;
+  }
+
+  .page-subtitle {
+    @apply text-body-md text-on-surface-variant mt-1;
+  }
+}

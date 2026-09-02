@@ -1,6 +1,28 @@
 # Production deployment — works on any Docker host, including an
 # Oracle Cloud (OCI) Always Free ARM VM. See README "Deploy" section.
 services:
+  # Stands in for the customer's existing clinical notes system.
+  # In a real deployment this service would not exist: NOTES_DATABASE_URL would
+  # point at the customer's own SQL Server or Postgres and we would hold
+  # read-only credentials to it.
+  notes-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mediextract
+      POSTGRES_PASSWORD: ${NOTES_DB_PASSWORD:?set NOTES_DB_PASSWORD in ./.env}
+      POSTGRES_DB: clinical_notes
+    volumes:
+      - notes_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    # Deliberately no `ports:` — the database is reachable only from the
+    # compose network, never from the host or the internet.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mediextract -d clinical_notes"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   backend:
     build:
       context: ./backend
@@ -10,6 +32,9 @@ services:
       - APP_ENV=production
     volumes:
       - app_data:/app/data
+    depends_on:
+      notes-db:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
@@ -29,3 +54,4 @@ services:
 
 volumes:
   app_data:
+  notes_db_data:

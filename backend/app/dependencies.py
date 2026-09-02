@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Annotated, AsyncGenerator
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.core.security import get_current_user
 from app.models.schemas import UserClaims
-from app.services.database_service import DatabaseService
-
+from app.services import app_database, data_source_service
+from app.services.database_service import DataSourceError, NotesRepository
 
 # ── Settings ──
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -21,12 +21,14 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 CurrentUser = Annotated[UserClaims, Depends(get_current_user)]
 
 
-# ── Database session ──
+# ── Application database session ──
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Yield a transactional DB session, rolled back on error."""
-    from app.services.database_service import async_session_factory
+    """Yield a session against the *application's own* database.
 
-    async with async_session_factory() as session:
+    Not the notes database: the audit log and data source registry are ours,
+    and the customer's system is read-only to us.
+    """
+    async with app_database.session_factory()() as session:
         try:
             yield session
             await session.commit()
@@ -38,8 +40,37 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
 
 
-# ── Services ──
-def get_database_service(
+# ── Notes repository for the selected data source ──
+async def build_repository(
+    session: AsyncSession,
+    settings: Settings,
+    source_id: str | None,
+) -> NotesRepository:
+    """Resolve the requested (or default) data source into a repository.
+
+    A plain function as well as a dependency: the extraction endpoint takes its
+    source_id from the request body, where a Depends-injected query parameter
+    cannot reach it.
+    """
+    ds = await data_source_service.resolve_source(session, source_id)
+    if ds is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "No data source configured. An administrator must add one first.",
+        )
+    try:
+        config = data_source_service.to_config(ds, settings)
+    except DataSourceError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return NotesRepository(config)
+
+
+async def get_notes_repository(
+    session: DbSession,
     settings: SettingsDep,
-) -> DatabaseService:
-    return DatabaseService(settings)
+    source_id: Annotated[str | None, Query(description="Data source to read from")] = None,
+) -> NotesRepository:
+    return await build_repository(session, settings, source_id)
+
+
+NotesRepo = Annotated[NotesRepository, Depends(get_notes_repository)]

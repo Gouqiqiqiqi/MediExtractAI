@@ -9,9 +9,11 @@ export async function fetchNotes(
   page = 1,
   pageSize = 20,
   search?: string,
+  sourceId?: string,
 ): Promise<NoteListResponse> {
   const params: Record<string, string | number> = { page, page_size: pageSize };
   if (search) params.search = search;
+  if (sourceId) params.source_id = sourceId;
   const { data } = await apiClient.get<NoteListResponse>('/notes/', { params });
   return data;
 }
