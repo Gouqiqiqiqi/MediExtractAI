@@ -28,7 +28,7 @@ from typing import Any
 import httpx
 
 from app.config import Settings
-from app.models.schemas import ColumnDefinition
+from app.models.schemas import ColumnDefinition, DocumentImage, SourceDocument
 from app.services.model_rotation import (
     CONFIG_ERROR_COOLDOWN_SECONDS,
     OPENAI_COMPATIBLE_ENDPOINTS,
@@ -52,7 +52,9 @@ MAX_CONCURRENT_EXTRACTIONS = 4
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 
-def _build_prompts(text: str, columns: list[ColumnDefinition]) -> tuple[str, str]:
+def _build_prompts(
+    document: SourceDocument, columns: list[ColumnDefinition]
+) -> tuple[str, str]:
     """Return (system_prompt, user_prompt) for a single note."""
     schema_description = "\n".join(
         f"- {col.name} ({col.data_type}): {col.description or 'No description'}"
@@ -78,12 +80,59 @@ def _build_prompts(text: str, columns: list[ColumnDefinition]) -> tuple[str, str
         "7. Do NOT include any explanation — only the JSON array.\n"
     )
 
+    if document.images:
+        # Reading a scan is a different job from reading text, and the failure
+        # mode is different too: a model asked to transcribe an illegible
+        # handwritten word will offer a plausible one rather than admit it
+        # cannot read it. In a clinical record a confident guess is worse than
+        # a gap, because only the gap gets checked.
+        system_prompt += (
+            "\nTHIS NOTE IS SUPPLIED AS SCANNED PAGE IMAGES:\n"
+            "8. Read the values off the page. Transcribe what is written, "
+            "including handwriting, without normalising or correcting it.\n"
+            "9. If a value is illegible, obscured or you are not certain of "
+            "it, use null. Never guess at a word you cannot read — an omitted "
+            "value gets checked by a human, an invented one does not.\n"
+            "10. Ignore printed form furniture — headers, field labels, page "
+            "numbers — unless a value is written against it.\n"
+        )
+
+    note_section = "## Medical Note\n"
+    if document.text.strip():
+        note_section += document.text
+        if document.images:
+            note_section += "\n\n(Further pages follow as images.)"
+    else:
+        pages = len(document.images)
+        note_section += (
+            f"The note is supplied as {pages} scanned page"
+            f"{'' if pages == 1 else 's'}, attached as images."
+        )
+
     user_prompt = (
         f"## Output Schema\n{schema_description}\n\n"
-        f"## Medical Note\n{text}\n\n"
+        f"{note_section}\n\n"
         "Extract the data now. Return ONLY the JSON array."
     )
     return system_prompt, user_prompt
+
+
+def _as_document(item: SourceDocument | str) -> SourceDocument:
+    """Accept a bare string where a document is expected.
+
+    Most callers extract from plain text and should not have to wrap it.
+    """
+    return item if isinstance(item, SourceDocument) else SourceDocument(text=item)
+
+
+def _describe(document: SourceDocument) -> str:
+    """How a document is logged — chars, pages, or both."""
+    parts = []
+    if document.text:
+        parts.append(f"{len(document.text)} chars")
+    if document.images:
+        parts.append(f"{len(document.images)} page images")
+    return ", ".join(parts) or "empty"
 
 
 def _normalise(parsed: Any) -> list[dict[str, Any]]:
@@ -96,6 +145,30 @@ def _normalise(parsed: Any) -> list[dict[str, Any]]:
     if not isinstance(parsed, list):
         return [parsed]
     return parsed
+
+
+def _openai_user_content(
+    user_prompt: str, images: list[DocumentImage] | None
+) -> Any:
+    """Build the user message for an OpenAI-shaped API.
+
+    Kept as a plain string when there are no images: the content-parts form is
+    universally accepted by the vision models but not by every text-only one,
+    and the text path here has to keep working on all of them.
+    """
+    if not images:
+        return user_prompt
+    content: list[dict[str, Any]] = [{"type": "text", "text": user_prompt}]
+    for image in images:
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{image.mime_type};base64,{image.data}"
+                },
+            }
+        )
+    return content
 
 
 class ExtractionService:
@@ -119,6 +192,7 @@ class ExtractionService:
             fallbacks=settings.ai_fallback_models,
             default_provider=settings.ai_provider,
             is_configured=lambda provider: configured.get(provider, False),
+            vision_models=settings.ai_vision_models,
         )
         cls._rotation = ModelRotation(chain)
 
@@ -131,8 +205,17 @@ class ExtractionService:
         else:
             logger.info(
                 "ExtractionService initialised — model chain: %s",
-                " → ".join(c.label for c in chain),
+                " → ".join(
+                    f"{c.label}{' [vision]' if c.supports_vision else ''}"
+                    for c in chain
+                ),
             )
+            if not any(c.supports_vision for c in chain):
+                logger.warning(
+                    "No model in the chain can read images — scanned documents "
+                    "will be rejected. Add a vision-capable model, or name one "
+                    "in AI_VISION_MODELS."
+                )
 
         cls._instance = cls()
 
@@ -160,12 +243,16 @@ class ExtractionService:
 
     async def extract(
         self,
-        texts: list[str],
+        documents: list[SourceDocument | str],
         columns: list[ColumnDefinition],
         provenance: list[dict[str, Any]] | None = None,
         models_used: set[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Extract structured rows from one or more free-text notes.
+        """Extract structured rows from one or more notes.
+
+        A note is a ``SourceDocument`` — text, scanned page images, or both —
+        and a bare string is accepted as shorthand for text. A note carrying
+        images is only sent to a model that can read them; see ``_generate``.
 
         ``models_used``, when given, is filled with the label of every model
         that answered. The chain rotates on quota, so a run reviewed weeks
@@ -179,16 +266,19 @@ class ExtractionService:
         can yield several rows, so the caller cannot reconstruct the mapping
         from the returned list alone.
         """
-        if provenance is not None and len(provenance) != len(texts):
+        if provenance is not None and len(provenance) != len(documents):
             raise ValueError(
-                f"provenance has {len(provenance)} entries for {len(texts)} texts"
+                f"provenance has {len(provenance)} entries for "
+                f"{len(documents)} documents"
             )
+
+        notes = [_as_document(d) for d in documents]
 
         settings = self._settings
         if settings is None:
             raise RuntimeError("ExtractionService not initialised")
 
-        total = len(texts)
+        total = len(notes)
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_EXTRACTIONS)
 
         # One budget for the whole batch, because the caller is one HTTP
@@ -196,17 +286,24 @@ class ExtractionService:
         # up to a request nginx has already given up on.
         deadline = time.monotonic() + settings.ai_deadline_seconds
 
-        async def extract_one(index: int, text: str) -> list[dict[str, Any]]:
+        async def extract_one(
+            index: int, document: SourceDocument
+        ) -> list[dict[str, Any]]:
             async with semaphore:
                 logger.info(
-                    "Extracting note %d/%d (%d chars)", index + 1, total, len(text)
+                    "Extracting note %d/%d (%s)",
+                    index + 1,
+                    total,
+                    _describe(document),
                 )
-                return await self._extract_single(text, columns, deadline, models_used)
+                return await self._extract_single(
+                    document, columns, deadline, models_used
+                )
 
         # Concurrent, but the results come back in request order, so the caller's
         # note order — and therefore the provenance pairing below — is preserved.
         per_note = await asyncio.gather(
-            *(extract_one(i, text) for i, text in enumerate(texts))
+            *(extract_one(i, note) for i, note in enumerate(notes))
         )
 
         all_rows: list[dict[str, Any]] = []
@@ -221,7 +318,7 @@ class ExtractionService:
 
     async def _extract_single(
         self,
-        text: str,
+        document: SourceDocument | str,
         columns: list[ColumnDefinition],
         deadline: float | None = None,
         models_used: set[str] | None = None,
@@ -233,9 +330,15 @@ class ExtractionService:
         if deadline is None:
             deadline = time.monotonic() + settings.ai_deadline_seconds
 
-        system_prompt, user_prompt = _build_prompts(text, columns)
+        note = _as_document(document)
+        system_prompt, user_prompt = _build_prompts(note, columns)
         raw = await self._generate(
-            settings, system_prompt, user_prompt, deadline, models_used
+            settings,
+            system_prompt,
+            user_prompt,
+            deadline,
+            models_used,
+            images=note.images,
         )
 
         try:
@@ -255,8 +358,14 @@ class ExtractionService:
         user_prompt: str,
         deadline: float,
         models_used: set[str] | None = None,
+        images: list[DocumentImage] | None = None,
     ) -> str:
         """Call the first usable model, moving down the chain as they fail.
+
+        When the note carries page images the chain is narrowed to the models
+        that can read them, before any of the availability logic below runs.
+        A text-only model is not a failed candidate for a scan — it was never
+        a candidate — so it is filtered out rather than tried and blocked.
 
         The cooldown a failure sets is shared, so the other notes in the batch
         skip the exhausted model instead of each discovering it for themselves.
@@ -274,6 +383,17 @@ class ExtractionService:
                 "AZURE_OPENAI_* settings) and restart."
             )
 
+        images = images or []
+        require_vision = bool(images)
+        if require_vision and not rotation.eligible(require_vision=True):
+            raise RuntimeError(
+                "This document is a scan and has to be read as images, but no "
+                "model in the chain can read images. Configure a "
+                "vision-capable model (Gemini and GPT-4o-class deployments "
+                "are), or name one in AI_VISION_MODELS. Chain: "
+                + ", ".join(c.label for c in rotation.candidates)
+            )
+
         tried: set[str] = set()
         waited: set[str] = set()
         while True:
@@ -281,28 +401,29 @@ class ExtractionService:
             if remaining <= 0:
                 raise RuntimeError(
                     "Extraction ran out of time before a model answered. "
-                    f"Models tried: {rotation.describe_waits()}. Select fewer "
-                    "notes, or try again once a model is back."
+                    f"Models tried: {rotation.describe_waits(require_vision)}. "
+                    "Select fewer notes, or try again once a model is back."
                 )
 
-            candidate = rotation.next_available(tried)
+            candidate = rotation.next_available(tried, require_vision)
 
             if candidate is None:
                 # Nothing is usable right now. Waiting beats failing only when
                 # the wait is short — a per-minute limit on a single-model
                 # deployment is seconds, but a spent daily quota is hours and
                 # the caller deserves to be told rather than left hanging.
-                candidate, wait = rotation.soonest(waited)
+                candidate, wait = rotation.soonest(waited, require_vision)
                 if candidate is None:
                     raise RuntimeError(
                         "Every AI model in the chain failed for this note: "
-                        f"{rotation.describe_waits()}"
+                        f"{rotation.describe_waits(require_vision)}"
                     )
                 if wait > settings.ai_max_wait_seconds or wait >= remaining:
                     raise RuntimeError(
                         "All AI models are rate limited — "
-                        f"{rotation.describe_waits()}. Add another model to "
-                        "AI_FALLBACK_MODELS, or try again later."
+                        f"{rotation.describe_waits(require_vision)}. Add "
+                        "another model to AI_FALLBACK_MODELS, or try again "
+                        "later."
                     )
                 logger.info(
                     "Waiting %.1fs for %s to come off cooldown", wait, candidate.label
@@ -320,7 +441,7 @@ class ExtractionService:
             timeout = min(float(settings.ai_request_timeout_seconds), remaining)
             try:
                 raw = await self._call(
-                    candidate, settings, system_prompt, user_prompt, timeout
+                    candidate, settings, system_prompt, user_prompt, timeout, images
                 )
             except ProviderError as exc:
                 tried.add(candidate.label)
@@ -337,7 +458,15 @@ class ExtractionService:
 
             primary = rotation.primary
             if primary is not None and candidate.label != primary.label:
-                logger.info("Note served by fallback model %s", candidate.label)
+                if require_vision and not primary.supports_vision:
+                    logger.info(
+                        "Scanned note served by %s — the primary model %s "
+                        "cannot read images",
+                        candidate.label,
+                        primary.label,
+                    )
+                else:
+                    logger.info("Note served by fallback model %s", candidate.label)
             rotation.clear(candidate)
             if models_used is not None:
                 models_used.add(candidate.label)
@@ -350,10 +479,12 @@ class ExtractionService:
         system_prompt: str,
         user_prompt: str,
         timeout: float,
+        images: list[DocumentImage] | None = None,
     ) -> str:
+        images = images or []
         if candidate.provider == "gemini":
             return await self._call_gemini(
-                settings, candidate.model, system_prompt, user_prompt, timeout
+                settings, candidate.model, system_prompt, user_prompt, timeout, images
             )
         if candidate.provider in OPENAI_COMPATIBLE_ENDPOINTS:
             return await self._call_openai_compatible(
@@ -363,9 +494,10 @@ class ExtractionService:
                 system_prompt,
                 user_prompt,
                 timeout,
+                images,
             )
         return await self._call_azure_openai(
-            settings, candidate.model, system_prompt, user_prompt, timeout
+            settings, candidate.model, system_prompt, user_prompt, timeout, images
         )
 
     # ── Providers ──
@@ -379,6 +511,7 @@ class ExtractionService:
         system_prompt: str,
         user_prompt: str,
         timeout: float,
+        images: list[DocumentImage] | None = None,
     ) -> str:
         if not settings.gemini_api_key:
             raise ProviderError(
@@ -388,9 +521,17 @@ class ExtractionService:
             )
 
         url = f"{GEMINI_BASE}/models/{model}:generateContent"
+        # The prompt first, then the pages in order: the instructions are what
+        # the pages are to be read against, and a model that meets the images
+        # first tends to describe them instead of extracting from them.
+        parts: list[dict[str, Any]] = [{"text": user_prompt}]
+        for image in images or []:
+            parts.append(
+                {"inline_data": {"mime_type": image.mime_type, "data": image.data}}
+            )
         payload = {
             "system_instruction": {"parts": [{"text": system_prompt}]},
-            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {
                 "temperature": 0.0,
                 "maxOutputTokens": 4096,
@@ -482,6 +623,7 @@ class ExtractionService:
         system_prompt: str,
         user_prompt: str,
         timeout: float,
+        images: list[DocumentImage] | None = None,
     ) -> str:
         """Call any provider that speaks OpenAI's /chat/completions.
 
@@ -501,7 +643,7 @@ class ExtractionService:
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": _openai_user_content(user_prompt, images)},
             ],
             "temperature": 0.0,
             "max_tokens": 4096,
@@ -628,6 +770,7 @@ class ExtractionService:
         system_prompt: str,
         user_prompt: str,
         timeout: float,
+        images: list[DocumentImage] | None = None,
     ) -> str:
         client = self._get_azure_client(settings)
         try:
@@ -635,7 +778,10 @@ class ExtractionService:
                 model=deployment,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
+                    {
+                        "role": "user",
+                        "content": _openai_user_content(user_prompt, images),
+                    },
                 ],
                 temperature=0.0,
                 max_tokens=4096,

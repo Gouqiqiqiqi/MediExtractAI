@@ -25,7 +25,7 @@ import datetime as dt
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable
 
 logger = logging.getLogger("mediextract.services.rotation")
@@ -66,6 +66,11 @@ class ModelCandidate:
 
     provider: str
     model: str
+    # Whether this model accepts images as well as text. Carried on the
+    # candidate rather than looked up at call time so that the rotation, which
+    # is otherwise only about availability, can filter on it without knowing
+    # anything about providers. Resolved by parse_chain.
+    supports_vision: bool = False
 
     @property
     def label(self) -> str:
@@ -91,6 +96,45 @@ class ProviderError(RuntimeError):
         self.reason = reason
 
 
+# ── Which models can see ────────────────────────────────────────────────────
+
+# Model names that accept image input, per provider. Deliberately narrow: a
+# false positive here is worse than a false negative. Sending images to a
+# text-only model comes back as a 400, which is classified as a configuration
+# error and takes the model out of the chain for the session — so an
+# unrecognised model is treated as text-only and simply not offered scans.
+# AI_VISION_MODELS adds to this list for a deployment that knows better.
+_VISION_MODEL_PATTERNS: dict[str, str] = {
+    # Every Gemini generation is natively multimodal. Gemma and the embedding
+    # models are served by the same API and are not, hence the anchored prefix.
+    "gemini": r"^gemini-",
+    # Azure deployment names are chosen by the customer, but they are
+    # conventionally the model name, and these are the vision-capable ones.
+    "azure_openai": r"gpt-4o|gpt-4\.1|gpt-4-turbo|gpt-5|o3|o4",
+    # gpt-oss on Groq is text-only; the Llama 4 and Llava models are not.
+    "groq": r"llama-4|scout|maverick|llava|pixtral",
+    # Pixtral is Mistral's vision line. mistral-small is multimodal from 3.1
+    # on, but the "-latest" alias moves, so it is left to AI_VISION_MODELS.
+    "mistral": r"pixtral",
+}
+
+
+def supports_vision(provider: str, model: str, extra: Iterable[str] = ()) -> bool:
+    """Whether a model can be sent page images.
+
+    ``extra`` is the configured AI_VISION_MODELS list — exact "provider:model"
+    labels, or bare model names, that should be treated as vision-capable
+    whatever the patterns below say.
+    """
+    label = f"{provider}:{model}"
+    for entry in extra:
+        entry = entry.strip()
+        if entry and entry in (label, model):
+            return True
+    pattern = _VISION_MODEL_PATTERNS.get(provider)
+    return bool(pattern and re.search(pattern, model, re.IGNORECASE))
+
+
 # ── Building the chain ──────────────────────────────────────────────────────
 
 def parse_chain(
@@ -98,6 +142,7 @@ def parse_chain(
     fallbacks: str,
     default_provider: str,
     is_configured: Callable[[str], bool],
+    vision_models: str = "",
 ) -> list[ModelCandidate]:
     """Turn the configured primary and fallback list into an ordered chain.
 
@@ -109,6 +154,7 @@ def parse_chain(
     """
     chain: list[ModelCandidate] = []
     seen: set[str] = set()
+    extra_vision = [e.strip() for e in vision_models.split(",") if e.strip()]
 
     for candidate in [primary, *_parse_fallbacks(fallbacks, default_provider)]:
         if candidate.label in seen:
@@ -125,7 +171,14 @@ def parse_chain(
             )
             continue
         seen.add(candidate.label)
-        chain.append(candidate)
+        chain.append(
+            replace(
+                candidate,
+                supports_vision=supports_vision(
+                    candidate.provider, candidate.model, extra_vision
+                ),
+            )
+        )
 
     return chain
 
@@ -293,11 +346,25 @@ class ModelRotation:
     def primary(self) -> ModelCandidate | None:
         return self._candidates[0] if self._candidates else None
 
-    def next_available(self, skip: set[str] | None = None) -> ModelCandidate | None:
+    def eligible(self, require_vision: bool = False) -> list[ModelCandidate]:
+        """The candidates that could serve this kind of work at all.
+
+        Capability is not availability: a text-only model is not "unavailable"
+        for a scanned page, it is simply not a candidate for it, and it must
+        never be put in a cooldown for that. Keeping the two apart is what
+        lets a scan and a text note share one chain and one set of cooldowns.
+        """
+        if not require_vision:
+            return list(self._candidates)
+        return [c for c in self._candidates if c.supports_vision]
+
+    def next_available(
+        self, skip: set[str] | None = None, require_vision: bool = False
+    ) -> ModelCandidate | None:
         """The first candidate in preference order that is usable right now."""
         skip = skip or set()
         now = time.monotonic()
-        for candidate in self._candidates:
+        for candidate in self.eligible(require_vision):
             if candidate.label in skip:
                 continue
             cooldown = self._blocked.get(candidate.label)
@@ -306,12 +373,14 @@ class ModelRotation:
             return candidate
         return None
 
-    def soonest(self, skip: set[str] | None = None) -> tuple[ModelCandidate | None, float]:
+    def soonest(
+        self, skip: set[str] | None = None, require_vision: bool = False
+    ) -> tuple[ModelCandidate | None, float]:
         """The candidate that frees up first, and how long that is."""
         skip = skip or set()
         now = time.monotonic()
         best: tuple[ModelCandidate | None, float] = (None, 0.0)
-        for candidate in self._candidates:
+        for candidate in self.eligible(require_vision):
             if candidate.label in skip:
                 continue
             cooldown = self._blocked.get(candidate.label)
@@ -343,6 +412,7 @@ class ModelRotation:
                     "provider": candidate.provider,
                     "model": candidate.model,
                     "is_primary": index == 0,
+                    "supports_vision": candidate.supports_vision,
                     "available": not waiting,
                     "available_in_seconds": (
                         round(cooldown.until - now, 1) if waiting else None
@@ -357,13 +427,19 @@ class ModelRotation:
             )
         return rows
 
-    def describe_waits(self) -> str:
+    def describe_waits(self, require_vision: bool = False) -> str:
         """A one-line summary for the error raised when nothing is usable."""
         now = time.monotonic()
         parts = []
-        for candidate in self._candidates:
+        for candidate in self.eligible(require_vision):
             cooldown = self._blocked.get(candidate.label)
             wait = max(cooldown.until - now, 0.0) if cooldown else 0.0
             reason = cooldown.reason if cooldown else "failed"
             parts.append(f"{candidate.label} ({reason}, {int(wait)}s)")
-        return "; ".join(parts) if parts else "no models configured"
+        if parts:
+            return "; ".join(parts)
+        return (
+            "no vision-capable models configured"
+            if require_vision
+            else "no models configured"
+        )

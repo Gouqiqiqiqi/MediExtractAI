@@ -152,10 +152,40 @@ Open port **80** in two places — they are independent and both are required:
 | `GEMINI_MODEL` | `gemini-3.5-flash` | See the quota note below before changing |
 | `AI_FALLBACK_MODELS` | Groq, Mistral, then two more Gemini models | Models to rotate to when the one above is rate limited, in order. `provider:model`, or a bare model name for `AI_PROVIDER`'s provider. |
 | `GROQ_API_KEY` / `MISTRAL_API_KEY` | — | Free keys, no card. Blank means that provider is dropped from the chain at startup. |
+| `AI_VISION_MODELS` | — | Extra models that can read page images, as `provider:model`. Only needed for a vision model this app does not recognise by name — see "Scanned documents" below. |
+| `PDF_RENDER_DPI` / `PDF_RENDER_MAX_PAGES` | `150` / `8` | How a scanned PDF is rendered for the model to read. |
 | `DATABASE_URL` | SQLite | The app's own database: extraction runs, their rows and revisions, audit log, data source registry |
 | `REQUIRE_SEPARATE_APPROVER` | `false` | `true`: the person who ran an extraction may not sign it off. Off in the demo, which has one user. |
 | `NOTES_DATABASE_URL` | falls back to `DATABASE_URL` | The clinical notes database. Registered as the default data source on first start. |
 | `DEMO_ALLOWED_DB_HOSTS` | `notes-db,localhost,127.0.0.1` | Hosts a demo deployment may connect a data source to. Ignored when `DEMO_MODE=false`. |
+
+### Scanned documents
+
+Not every PDF is text. A scan, a photographed note, or an image saved as a PDF has no
+text layer at all, and a text extractor returns an empty string for it — which is worse
+than an error, because an empty note reaches the model looking like a successful upload.
+
+So a PDF whose text layer is empty (or thin enough to be only a scanner's header and
+page numbers) is rendered to page images instead, and those pages are sent to the model
+to read directly. No OCR step: the model reads the page.
+
+That changes which models may serve the note. The chain is filtered to the ones that
+accept images before any of the rotation logic runs, so a scan is never offered to a
+text-only model — the default chain's `groq:openai/gpt-oss-120b` keeps serving text
+notes and is simply not a candidate for scanned ones. It is a capability, not an
+availability: a model skipped this way is *not* put on a cooldown, because it is still
+the right answer for the next note that is text. `GET /api/v1/extraction/models` reports
+`supports_vision` per model, and a scan with no vision-capable model in the chain fails
+with a message that says so rather than a 400 from the provider.
+
+Two things are deliberately conservative here. Models are recognised as vision-capable
+by name, and an unrecognised one is assumed text-only — a false positive costs a 400
+that the rotation reads as a broken model and parks for the session, a false negative
+only costs an unused option. And the prompt for a scan tells the model to return `null`
+for anything illegible rather than guess: in a clinical record an omitted value gets
+checked by a human and an invented one does not. Rows from a scan should be reviewed
+before they are approved; the uploader says so, and the pages the model was given are
+shown next to the result.
 
 ### Free-tier quota, and what happens when it runs out
 

@@ -15,6 +15,7 @@ from app.models.schemas import (
     ExtractionResponse,
     FileExtractionRequest,
     ModelStatus,
+    SourceDocument,
     UserClaims,
 )
 from app.services import run_service
@@ -114,7 +115,7 @@ async def extract_from_database(
     models_used: set[str] = set()
     try:
         rows = await extractor.extract(
-            texts=[n.note_text for n in notes],
+            documents=[SourceDocument(text=n.note_text) for n in notes],
             columns=body.columns,
             provenance=provenance,
             models_used=models_used,
@@ -162,11 +163,17 @@ async def extract_from_text(
     session: DbSession,
     user: UserClaims = Depends(require_role(Role.ADMIN, Role.CLINICIAN)),
 ):
-    """Extract structured data from raw text (e.g. pasted or from an uploaded file)."""
+    """Extract structured data from an uploaded document.
+
+    The document is text, scanned page images, or both — a batch of uploads
+    where one file was a scan arrives as one of each. Which models may serve
+    it follows from that; see ExtractionService._generate.
+    """
     logger.info(
-        "User %s extracting from text (%d chars), %d columns",
+        "User %s extracting from %d chars and %d page image(s), %d columns",
         user.sub,
         len(body.text),
+        len(body.images),
         len(body.columns),
     )
 
@@ -179,7 +186,7 @@ async def extract_from_text(
     models_used: set[str] = set()
     try:
         rows = await extractor.extract(
-            texts=[body.text],
+            documents=[SourceDocument(text=body.text, images=body.images)],
             columns=body.columns,
             provenance=[{document_col: body.source_name}],
             models_used=models_used,

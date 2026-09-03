@@ -51,6 +51,24 @@ class Settings(BaseSettings):
         "gemini-2.5-flash"
     )
 
+    # Models that can read images, beyond the ones recognised by name in
+    # app.services.model_rotation. Comma-separated "provider:model" labels.
+    # The built-in list is deliberately conservative — sending images to a
+    # text-only model earns a 400, which the rotation reads as a broken
+    # configuration and parks the model for the session — so a deployment
+    # naming a vision model we do not know about says so here.
+    ai_vision_models: str = ""
+
+    # ── Scanned documents ──
+    # A PDF with no text layer is rendered to images and read by a vision
+    # model. 150 dpi is comfortably enough for printed clinical notes and
+    # keeps a page around a couple of hundred KB; the page cap exists because
+    # every page is base64 in a JSON request and then tokens in a context
+    # window.
+    pdf_render_dpi: int = 150
+    pdf_render_max_pages: int = 8
+    pdf_render_jpeg_quality: int = 80
+
     # How long a model is left alone after a 429 that carried no delay of its
     # own. Providers that do say (Google's RetryInfo, a Retry-After header) are
     # believed instead, and an exhausted per-day quota is held until it resets.

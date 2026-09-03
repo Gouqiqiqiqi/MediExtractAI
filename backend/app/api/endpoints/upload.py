@@ -63,9 +63,13 @@ async def upload_file(
     )
 
     # ── Parse ──
-    file_service = FileService()
+    file_service = FileService(
+        render_dpi=settings.pdf_render_dpi,
+        max_render_pages=settings.pdf_render_max_pages,
+        jpeg_quality=settings.pdf_render_jpeg_quality,
+    )
     try:
-        text = file_service.extract_text(content, ext)
+        parsed = file_service.parse_document(content, ext)
     except Exception as exc:
         logger.exception("Failed to parse uploaded file '%s'", file.filename)
         raise HTTPException(
@@ -73,9 +77,25 @@ async def upload_file(
             f"Could not parse file: {exc}",
         ) from exc
 
+    # A file that yielded neither text nor pages is a failure, and saying so
+    # here is the point: it used to come back as a 200 with an empty string,
+    # which looked like a successful upload of an empty document all the way
+    # up to the model.
+    if not parsed.has_content:
+        logger.warning("Extracted nothing from '%s'", file.filename)
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"No text could be extracted from '{file.filename}'. If it is a "
+            "scan, the pages could not be rendered either — try re-exporting "
+            "it, or upload the original document.",
+        )
+
     return UploadResponse(
         filename=file.filename,
         size_bytes=len(content),
-        extracted_text=text,
-        char_count=len(text),
+        extracted_text=parsed.text,
+        char_count=len(parsed.text),
+        page_images=parsed.images,
+        page_count=parsed.page_count,
+        warning=parsed.warning,
     )

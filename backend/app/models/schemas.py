@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -173,6 +173,33 @@ class DataSourceTestResult(BaseModel):
 # Extraction
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# A page rendered from a scanned document, ready to be sent to a vision model.
+# Base64 rather than bytes because it travels through JSON on both legs of the
+# trip: the browser gets it from /upload and posts it back to /extraction.
+class DocumentImage(BaseModel):
+    """One page of a document, as an image."""
+
+    mime_type: Literal["image/jpeg", "image/png", "image/webp"] = "image/jpeg"
+    data: str = Field(..., description="Base64-encoded image bytes, no data: prefix")
+    page: int = Field(default=1, ge=1)
+
+
+class SourceDocument(BaseModel):
+    """What one extraction request is run against.
+
+    A document is text, or page images, or — for a PDF whose text layer covers
+    only part of it — both. The distinction reaches the model chain because a
+    document with images may only go to a model that can see them.
+    """
+
+    text: str = ""
+    images: list[DocumentImage] = Field(default_factory=list)
+
+    @property
+    def needs_vision(self) -> bool:
+        return bool(self.images)
+
+
 class ExtractionRequest(BaseModel):
     """Request to extract structured data from database notes."""
 
@@ -184,12 +211,35 @@ class ExtractionRequest(BaseModel):
 
 
 class FileExtractionRequest(BaseModel):
-    """Request to extract structured data from free text."""
-    text: str = Field(..., min_length=1, max_length=500_000)
+    """Request to extract structured data from uploaded text and/or page images."""
+
+    # No longer required on its own: a scanned document has no text layer, and
+    # arrives as images only. One of the two must be present — see below.
+    text: str = Field(default="", max_length=500_000)
+    # Pages of scanned documents, to be read by a vision-capable model. Capped
+    # because each page is a few hundred KB of base64 and a request carrying
+    # fifty of them is a timeout, not an extraction.
+    images: list[DocumentImage] = Field(default_factory=list, max_length=20)
     columns: list[ColumnDefinition] = Field(..., min_length=1, max_length=50)
     # Where the text came from — an uploaded filename, typically. Recorded
     # against every row so a result can always be traced back to its source.
     source_name: str = Field(default="Pasted text", max_length=255)
+
+    @model_validator(mode="after")
+    def require_content(self) -> FileExtractionRequest:
+        """Reject a request that carries nothing to extract from.
+
+        The test is for a letter or a digit rather than for a non-empty
+        string, and that is the whole point: the client joins several
+        documents with a "---" separator, so two empty documents used to
+        arrive here as seven characters that passed every emptiness check and
+        cost a model call. Rules and whitespace are not a note.
+        """
+        if not self.images and not any(ch.isalnum() for ch in self.text):
+            raise ValueError(
+                "Provide text or at least one page image to extract from"
+            )
+        return self
 
 
 class ExtractionResponse(BaseModel):
@@ -347,6 +397,9 @@ class ModelStatus(BaseModel):
     provider: str
     model: str
     is_primary: bool
+    # Whether this model can be sent page images. A scanned document is only
+    # offered to the models where this is true.
+    supports_vision: bool = False
     available: bool
     # Seconds until it can be tried again; null when it is available.
     available_in_seconds: float | None = None
@@ -366,6 +419,18 @@ class UploadResponse(BaseModel):
     size_bytes: int
     extracted_text: str
     char_count: int
+    # Set when the file had no usable text layer and was rendered to images
+    # instead — a scan, or a photo saved as a PDF. The client posts these back
+    # with the extraction request; the model reads the pages directly.
+    page_images: list[DocumentImage] = Field(default_factory=list)
+    page_count: int = 0
+    # Human-readable note about how the file was handled, shown next to it in
+    # the uploader. Empty when the file parsed to text in the ordinary way.
+    warning: str = ""
+
+    @property
+    def has_content(self) -> bool:
+        return bool(self.extracted_text.strip() or self.page_images)
 
 
 # Export takes no request body any more: a file is produced from a stored run,

@@ -117,6 +117,8 @@ export interface ExtractionRequest {
 
 export interface FileExtractionRequest {
   text: string;
+  /** Pages of scanned documents, read by the model directly. */
+  images?: DocumentImage[];
   columns: ColumnDefinition[];
   /** Where the text came from — an uploaded filename, typically. */
   source_name?: string;
@@ -207,11 +209,28 @@ export interface RunStats {
 
 // ── Upload ──
 
+/** One page of a scanned document, ready to be sent to a vision model. */
+export interface DocumentImage {
+  mime_type: string;
+  /** Base64-encoded image bytes, with no `data:` prefix. */
+  data: string;
+  page: number;
+}
+
 export interface UploadResponse {
   filename: string;
   size_bytes: number;
   extracted_text: string;
   char_count: number;
+  /**
+   * Present when the file had no text layer and was rendered to images
+   * instead — a scan, or a photo saved as a PDF. These go back to the server
+   * with the extraction request and are read by a vision-capable model.
+   */
+  page_images: DocumentImage[];
+  page_count: number;
+  /** How the file was handled, when that is worth saying. Shown in the list. */
+  warning: string;
 }
 
 // ── Export ──

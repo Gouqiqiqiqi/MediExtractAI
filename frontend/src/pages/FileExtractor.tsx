@@ -8,8 +8,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ClipboardCheck, FileText, Play } from 'lucide-react';
-import type { ColumnDefinition, RunDetail } from '../types';
+import { ClipboardCheck, FileText, Play, ScanLine } from 'lucide-react';
+import type { ColumnDefinition, RunDetail, UploadResponse } from '../types';
 import { extractFromText } from '../api/extraction';
 import { errorMessage } from '../api/errors';
 import FileUpload from '../components/FileUpload/FileUpload';
@@ -26,35 +26,55 @@ import { relativeTime } from '../lib/time';
 export default function FileExtractor() {
   const { canExtract } = useRole();
   const [columns, setColumns] = useState<ColumnDefinition[]>([]);
-  const [text, setText] = useState('');
-  const [filenames, setFilenames] = useState<string[]>([]);
+  const [documents, setDocuments] = useState<UploadResponse[]>([]);
   // The finished run, and whether its table is open over the page. Closing the
   // pop-up keeps the run, so the panel below can offer to reopen it.
   const [run, setRun] = useState<RunDetail | null>(null);
   const [showResult, setShowResult] = useState(false);
   const [extracting, setExtracting] = useState(false);
 
+  const filenames = documents.map((d) => d.filename);
   const documentLabel = filenames.join(', ') || 'Uploaded text';
 
-  const handleTextExtracted = (extractedText: string, names: string[]) => {
-    setText(extractedText);
-    setFilenames(names);
+  // Only documents that actually yielded something are joined. Joining them
+  // all was the bug this replaced: two files that parsed to nothing became
+  // the seven characters of the separator between them, which read as
+  // content everywhere downstream — the button enabled, and the model was
+  // asked to extract a diagnosis from "---".
+  const text = documents
+    .map((d) => d.extracted_text)
+    .filter((t) => t.trim())
+    .join('\n\n---\n\n');
+  const images = documents.flatMap((d) => d.page_images);
+
+  const handleDocumentsChange = (uploaded: UploadResponse[]) => {
+    setDocuments(uploaded);
     setRun(null);
   };
 
   const namedColumns = columns.filter((c) => c.name.trim());
   const schemaReady = namedColumns.length > 0 && namedColumns.length === columns.length;
-  const hasText = text.trim().length > 0;
-  const canRun = hasText && schemaReady && !extracting;
+  const hasContent = text.trim().length > 0 || images.length > 0;
+  const canRun = hasContent && schemaReady && !extracting;
+
+  // What step 1 has to show: characters where there is text, pages where the
+  // document is a scan, and both for a mixed upload.
+  const contentSummary = [
+    text.length > 0 ? `${text.length.toLocaleString()} characters` : '',
+    images.length > 0 ? `${images.length} scanned page${images.length === 1 ? '' : 's'}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   const runExtraction = async () => {
-    if (!hasText) return toast.error('Upload at least one file first');
+    if (!hasContent) return toast.error('Upload at least one file first');
     if (!schemaReady) return toast.error('Every column needs a name');
 
     setExtracting(true);
     try {
       const res = await extractFromText({
         text,
+        images,
         columns,
         source_name: filenames.join(', ') || undefined,
       });
@@ -87,16 +107,14 @@ export default function FileExtractor() {
         <StepPanel
           index={1}
           title="Documents"
-          status={hasText ? 'done' : 'active'}
+          status={hasContent ? 'done' : 'active'}
           summary={
-            hasText
-              ? `${documentLabel} · ${text.length.toLocaleString()} characters`
-              : 'Nothing uploaded yet'
+            hasContent ? `${documentLabel} · ${contentSummary}` : 'Nothing uploaded yet'
           }
         >
-          <FileUpload onTextExtracted={handleTextExtracted} multiple />
+          <FileUpload onDocumentsChange={handleDocumentsChange} multiple />
 
-          {hasText && (
+          {text.trim().length > 0 && (
             <details className="mt-3 group">
               <summary
                 className="flex items-center gap-1.5 cursor-pointer text-label-lg text-on-surface-variant
@@ -113,12 +131,36 @@ export default function FileExtractor() {
               </pre>
             </details>
           )}
+
+          {images.length > 0 && (
+            <details className="mt-3 group">
+              <summary
+                className="flex items-center gap-1.5 cursor-pointer text-label-lg text-on-surface-variant
+                           hover:text-on-surface transition-colors select-none"
+              >
+                <ScanLine size={14} />
+                Show the {images.length} page{images.length === 1 ? '' : 's'} sent to the model
+              </summary>
+              {/* The pages themselves, because these are what the model was
+                  given: if a row looks wrong, this is where it is checked. */}
+              <div className="mt-2 flex gap-3 overflow-x-auto pb-1">
+                {images.map((image, i) => (
+                  <img
+                    key={`${image.page}-${i}`}
+                    src={`data:${image.mime_type};base64,${image.data}`}
+                    alt={`Page ${image.page}`}
+                    className="h-64 w-auto rounded-gm-md border border-outline bg-surface"
+                  />
+                ))}
+              </div>
+            </details>
+          )}
         </StepPanel>
 
         <StepPanel
           index={2}
           title="Output schema"
-          status={schemaReady ? 'done' : hasText ? 'active' : 'todo'}
+          status={schemaReady ? 'done' : hasContent ? 'active' : 'todo'}
           summary={
             columns.length === 0
               ? 'What columns do you want?'
@@ -170,7 +212,7 @@ export default function FileExtractor() {
       <div className="fixed bottom-0 left-60 right-0 border-t border-outline bg-surface/95 backdrop-blur-sm z-20">
         <div className="max-w-6xl mx-auto px-6 py-2.5 flex items-center gap-4">
           <p className="text-label-md text-on-surface-variant tabular">
-            {hasText ? `${text.length.toLocaleString()} characters` : 'No document'}
+            {hasContent ? contentSummary : 'No document'}
             <span className="mx-1.5 text-outline">×</span>
             {namedColumns.length} column{namedColumns.length === 1 ? '' : 's'}
             {!schemaReady && columns.length > 0 && (
