@@ -77,14 +77,14 @@ Approval is enforced by the API, not by the UI: exports are addressed by run id 
 ```
 React 18 + TypeScript SPA ──▶ nginx ──▶ FastAPI (async)
                                           ├─▶ Gemini API / Azure OpenAI
-                                          ├─▶ App database  (SQLite)      runs, rows, revisions,
+                                          ├─▶ App database   (PostgreSQL)  runs, rows, revisions,
                                           │                                audit log, data sources
                                           ├─▶ Notes database (PostgreSQL)  the customer's system,
                                           │                                read-only
                                           └─▶ Local file parsing (PyMuPDF, python-docx)
 ```
 
-The two databases are deliberately separate. In a real deployment the notes live in a system we do not own and hold read-only credentials to; putting our audit log inside the customer's estate is exactly what a governance review would object to.
+The two databases are deliberately separate — separate instances, not two schemas in one. In a real deployment the notes live in a system we do not own and hold read-only credentials to; putting our audit log inside the customer's estate is exactly what a governance review would object to. Development collapses the app database to a SQLite file so a clone runs with no external service; the deployment does not.
 
 - **Backend:** FastAPI, SQLAlchemy 2 (async), Pydantic v2
 - **Frontend:** React 18, TypeScript, Vite, Tailwind
@@ -117,16 +117,18 @@ Or run natively: `uvicorn app.main:app --reload` in `backend/`, `npm run dev` in
 ## Deploy (single VM — e.g. OCI Always Free)
 
 Runs on an Oracle Cloud Always Free ARM VM (Ubuntu). All images are multi-arch. The
-production compose file adds a PostgreSQL service that stands in for the customer's
-clinical system.
+production compose file adds two PostgreSQL services: `app-db`, which holds the audit
+trail and review state, and `notes-db`, which stands in for the customer's clinical
+system. Neither publishes a port — they are reachable only from the compose network.
 
 ```bash
 # on the VM
 sudo apt update && sudo apt install -y docker.io docker-compose-v2
 git clone https://github.com/Gouqiqiqiqi/MediExtractAI.git && cd MediExtractAI
 
-# the notes database password, read by docker compose
-echo "NOTES_DB_PASSWORD=$(openssl rand -hex 24)" > .env && chmod 600 .env
+# the two database passwords, read by docker compose
+{ echo "NOTES_DB_PASSWORD=$(openssl rand -hex 24)"
+  echo "APP_DB_PASSWORD=$(openssl rand -hex 24)"; } > .env && chmod 600 .env
 
 cp backend/.env.example backend/.env
 nano backend/.env   # GEMINI_API_KEY, a random APP_SECRET_KEY, and NOTES_DATABASE_URL
@@ -154,7 +156,7 @@ Open port **80** in two places — they are independent and both are required:
 | `GROQ_API_KEY` / `MISTRAL_API_KEY` | — | Free keys, no card. Blank means that provider is dropped from the chain at startup. |
 | `AI_VISION_MODELS` | — | Extra models that can read page images, as `provider:model`. Only needed for a vision model this app does not recognise by name — see "Scanned documents" below. |
 | `PDF_RENDER_DPI` / `PDF_RENDER_MAX_PAGES` | `150` / `8` | How a scanned PDF is rendered for the model to read. |
-| `DATABASE_URL` | SQLite | The app's own database: extraction runs, their rows and revisions, audit log, data source registry |
+| `DATABASE_URL` | SQLite | The app's own database: extraction runs, their rows and revisions, audit log, data source registry. The production compose file overrides it with the `app-db` Postgres service. |
 | `REQUIRE_SEPARATE_APPROVER` | `false` | `true`: the person who ran an extraction may not sign it off. Off in the demo, which has one user. |
 | `NOTES_DATABASE_URL` | falls back to `DATABASE_URL` | The clinical notes database. Registered as the default data source on first start. |
 | `DEMO_ALLOWED_DB_HOSTS` | `notes-db,localhost,127.0.0.1` | Hosts a demo deployment may connect a data source to. Ignored when `DEMO_MODE=false`. |

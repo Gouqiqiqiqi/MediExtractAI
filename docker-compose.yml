@@ -31,6 +31,35 @@ services:
       retries: 5
       start_period: 20s
 
+  # The application's own database: audit log, runs, rows, revisions, sign-off
+  # state. A separate instance from notes-db rather than another schema inside
+  # it, because in a real deployment that one belongs to the customer and this
+  # one does not. Keeping the split at the instance level here means the
+  # deployed shape is the shape that would be proposed to a governance review.
+  # See backend/app/services/app_database.py.
+  app-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mediextract
+      POSTGRES_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in ./.env}
+      POSTGRES_DB: mediextract
+    volumes:
+      - app_db_data:/var/lib/postgresql/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    # Deliberately no `ports:` — an audit trail that is reachable from the
+    # internet is not much of an audit trail.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mediextract -d mediextract"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   backend:
     build:
       context: ./backend
@@ -38,9 +67,14 @@ services:
       - ./backend/.env
     environment:
       - APP_ENV=production
-    volumes:
-      - app_data:/app/data
+      # Set here rather than in backend/.env because compose's `environment`
+      # wins over `env_file`: the deployed stack uses Postgres whatever the
+      # env file (which defaults to SQLite for the zero-dependency dev run)
+      # happens to say.
+      - DATABASE_URL=postgresql+asyncpg://mediextract:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in ./.env}@app-db:5432/mediextract
     depends_on:
+      app-db:
+        condition: service_healthy
       notes-db:
         condition: service_healthy
     logging:
@@ -71,5 +105,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  app_data:
+  app_db_data:
   notes_db_data:

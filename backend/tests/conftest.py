@@ -14,7 +14,13 @@ from pathlib import Path
 # chosen before anything under app/ is imported. Hence the noqa on the imports
 # below — same reason as scripts/seed_notes.py.
 TEST_DB = Path(tempfile.gettempdir()) / "mediextract_test.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{TEST_DB}"
+# SQLite by default so the suite needs no services. Production runs on Postgres,
+# so TEST_DATABASE_URL points the same tests at a real one when it matters —
+# what breaks between the two is DDL and column types, which only a Postgres
+# run exercises.
+os.environ["DATABASE_URL"] = os.environ.get(
+    "TEST_DATABASE_URL", f"sqlite+aiosqlite:///{TEST_DB}"
+)
 
 import pytest  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
